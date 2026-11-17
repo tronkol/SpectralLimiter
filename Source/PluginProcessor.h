@@ -9,6 +9,7 @@ class SpectralLimiterProcessor : public juce::AudioProcessor,
 {
 public:
     static constexpr int kNumSizes = 7; // 1024 ... 65536  ->  513 ... 32769 bande
+    static juce::String curveId (const char* key, int i) { return "c" + juce::String (i + 1) + "_" + key; }
     static int fftSizeForIndex (int i) { return 1024 << juce::jlimit (0, kNumSizes - 1, i); }
 
     SpectralLimiterProcessor();
@@ -59,7 +60,9 @@ private:
     void ensureSlot (int slot);
 
     std::atomic<float>* pThr; std::atomic<float>* pGain; std::atomic<float>* pBal;
-    std::atomic<float>* pCeil; std::atomic<float>* pRel; std::atomic<float>* pAtk; std::atomic<float>* pRatio; std::atomic<float>* pOs; std::atomic<float>* pBands;
+    std::atomic<float>* pCeil; std::atomic<float>* pRel; std::atomic<float>* pAtk; std::atomic<float>* pRatio; std::atomic<float>* pOs;
+    std::atomic<float>* cType[sl::kMaxCurvePoints]; std::atomic<float>* cFreq[sl::kMaxCurvePoints];
+    std::atomic<float>* cGain[sl::kMaxCurvePoints]; std::atomic<float>* cQ[sl::kMaxCurvePoints]; std::atomic<float>* pBands;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpectralLimiterProcessor)
 };

@@ -17,7 +17,7 @@ APVTS::ParameterLayout SpectralLimiterProcessor::createLayout()
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "balance", 1 }, "Balance",
                                                    NormalisableRange<float> (-100.0f, 100.0f, 1.0f), 0.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (
-                                                       [] (float v, int) { return v == 0.0f ? String ("C") : (v < 0 ? "L " : "R ") + String ((int) std::abs (v)) + "%"; })));
+                                                       [] (float v, int) { return v == 0.0f ? String ("uniforme") : (v < 0 ? String ("bassi ") : String ("alti ")) + String ((int) std::abs (v)) + "%"; })));
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "ceiling", 1 }, "Ceiling",
                                                    NormalisableRange<float> (-12.0f, 0.0f, 0.1f), -1.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (dbText)));
@@ -37,6 +37,18 @@ APVTS::ParameterLayout SpectralLimiterProcessor::createLayout()
                                                     StringArray { "Off", "2x", "4x" }, 0));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "bands", 1 }, "Bands",
                                                     StringArray { "513", "1025", "2049", "4097", "8193", "16385", "32769" }, 2));
+    const float defFreq[sl::kMaxCurvePoints] = { 100.0f, 250.0f, 700.0f, 2000.0f, 5000.0f, 10000.0f };
+    for (int i = 0; i < sl::kMaxCurvePoints; ++i)
+    {
+        l.add (std::make_unique<AudioParameterChoice> (ParameterID { curveId ("type", i), 1 }, "Focus " + String (i + 1) + " tipo",
+                                                        StringArray { "Off", "Low cut", "Low shelf", "Peak", "High shelf", "High cut" }, 0));
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { curveId ("freq", i), 1 }, "Focus " + String (i + 1) + " freq",
+                                                       NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.23f), defFreq[i]));
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { curveId ("gain", i), 1 }, "Focus " + String (i + 1) + " gain",
+                                                       NormalisableRange<float> (-24.0f, 6.0f, 0.1f), 0.0f));
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { curveId ("q", i), 1 }, "Focus " + String (i + 1) + " Q",
+                                                       NormalisableRange<float> (0.3f, 8.0f, 0.01f, 0.5f), 0.71f));
+    }
     return l;
 }
 
@@ -54,6 +66,13 @@ SpectralLimiterProcessor::SpectralLimiterProcessor()
     pAtk = apvts.getRawParameterValue ("attack");
     pRatio = apvts.getRawParameterValue ("ratio");
     pOs = apvts.getRawParameterValue ("oversampling");
+    for (int i = 0; i < sl::kMaxCurvePoints; ++i)
+    {
+        cType[i] = apvts.getRawParameterValue (curveId ("type", i));
+        cFreq[i] = apvts.getRawParameterValue (curveId ("freq", i));
+        cGain[i] = apvts.getRawParameterValue (curveId ("gain", i));
+        cQ[i] = apvts.getRawParameterValue (curveId ("q", i));
+    }
     pBands = apvts.getRawParameterValue ("bands");
 }
 
@@ -134,6 +153,13 @@ void SpectralLimiterProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     p.thresholdDb = pThr->load();
     p.gainDb = pGain->load();
     p.balance = pBal->load() / 100.0;
+    for (int i = 0; i < sl::kMaxCurvePoints; ++i)
+    {
+        p.curve[i].type = juce::jlimit (0, 5, (int) std::lround (cType[i]->load()));
+        p.curve[i].freq = cFreq[i]->load();
+        p.curve[i].gainDb = cGain[i]->load();
+        p.curve[i].q = cQ[i]->load();
+    }
     p.ceilingDb = pCeil->load();
     p.releaseMs = pRel->load();
     p.attackMs = pAtk->load();

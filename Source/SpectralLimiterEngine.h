@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include "FocusCurve.h"
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -256,10 +257,11 @@ public:
     {
         double thresholdDb = -18.0; // livello di banda (equivalente-sinusoide) oltre il quale si limita
         double gainDb      = 0.0;   // gain dopo lo stadio spettrale, prima del brickwall
-        double balance     = 0.0;   // -1 = solo sinistra ... +1 = solo destra
+        double balance     = 0.0;   // inclinazione dell'intervento: -1 = solo bassi ... +1 = solo alti (continuo)
         double ceilingDb   = -1.0;  // massimo assoluto in uscita (true-peak)
         double releaseMs   = 150.0; // recupero di entrambi gli stadi
         double ratio       = 100.0; // >= 100 = infinito (limiter vero); 1 = nessuna riduzione
+        CurvePoint curve[kMaxCurvePoints]; // curva di focus (punti con type == kOff sono ignorati)
         double attackMs    = 0.0;   // attacco dello stadio spettrale (0 = istantaneo); per frame, minimo = hop
     };
 
@@ -325,6 +327,8 @@ public:
             }
             for (auto& w : smoothK) w /= s;
         }
+        wBin.assign ((size_t) nb, 1.0);
+        wCurveValid = false;
         halfW.assign ((size_t) nb, 2);
         for (int k = 0; k < nb; ++k)
             halfW[(size_t) k] = std::max (2, (int) std::lround (0.05 * k));
@@ -356,7 +360,7 @@ public:
         std::fill (dlL.begin(), dlL.end(), 0.0);  std::fill (dlR.begin(), dlR.end(), 0.0);
         t = 0; frameCount = 0; dpos = 0; gPrev = 1.0;
         smin.reset(); box1.reset(); box2.reset(); tp.reset();
-        gainSm = gainTarget; balLSm = balLTarget; balRSm = balRTarget;
+        gainSm = gainTarget;
     }
 
     void setParams (const Params& p)
@@ -364,9 +368,7 @@ public:
         params = p;
         if (! prepared) return;
         gainTarget = dbToLin (p.gainDb);
-        const double b = std::max (-1.0, std::min (1.0, p.balance));
-        balLTarget = b > 0.0 ? 1.0 - b : 1.0;
-        balRTarget = b < 0.0 ? 1.0 + b : 1.0;
+        updateWeights();
         ceilLin = dbToLin (p.ceilingDb);
         ceilDet = ceilLin * 0.9606; // margine -0.35 dB sulla rilevazione true-peak (gain vicini non uniformi)
         const double tau = std::max (p.releaseMs, 1.0) * 1e-3;
@@ -388,15 +390,13 @@ public:
         for (int s = 0; s < n; ++s)
         {
             gainSm += (gainTarget - gainSm) * smoothCoef;
-            balLSm += (balLTarget - balLSm) * smoothCoef;
-            balRSm += (balRTarget - balRSm) * smoothCoef;
 
             double xl = (double) l[s], xr = (double) r[s];
             if (! (std::abs (xl) < 1.0e6)) xl = 0.0; // scarta NaN e inf
             if (! (std::abs (xr) < 1.0e6)) xr = 0.0;
 
             double yl, yr;
-            stftStep (xl * balLSm, xr * balRSm, yl, yr);
+            stftStep (xl, xr, yl, yr);
             yl *= gainSm;
             yr *= gainSm;
 
@@ -422,6 +422,36 @@ private:
         inR[(size_t) slot] = inr;
         if (((t + 1) & (H - 1)) == 0) processFrame();
         ++t;
+    }
+
+    // Pesi per bin dalla curva di focus + balance. Calcolo su griglia log di 512 punti, poi interpolazione.
+    void updateWeights()
+    {
+        bool same = wCurveValid && params.balance == wBalance;
+        for (int i = 0; same && i < kMaxCurvePoints; ++i) same = (params.curve[i] == wCurve[i]);
+        if (same || nb <= 0) return;
+        wBalance = params.balance;
+        for (int i = 0; i < kMaxCurvePoints; ++i) wCurve[i] = params.curve[i];
+        wCurveValid = true;
+
+        constexpr int G = 512;
+        constexpr double fLo = 20.0, fHi = 20000.0;
+        double grid[G];
+        const double ratio = std::log (fHi / fLo);
+        for (int g = 0; g < G; ++g)
+        {
+            const double f = fLo * std::exp (ratio * g / (G - 1));
+            grid[g] = curveWeight (wCurve, kMaxCurvePoints, f) * tiltWeight (wBalance, f);
+        }
+        const double binHz = fs / N;
+        for (int k = 0; k < nb; ++k)
+        {
+            const double f = std::max (k * binHz, 1.0);
+            const double pos = std::max (0.0, std::min ((double) (G - 1), std::log (f / fLo) / ratio * (G - 1)));
+            const int i0 = std::min (G - 2, (int) pos);
+            const double fr = pos - i0;
+            wBin[(size_t) k] = grid[i0] * (1.0 - fr) + grid[i0 + 1] * fr;
+        }
     }
 
     void processFrame()
@@ -467,7 +497,7 @@ private:
                 const double over = 10.0 * std::log10 (a2) - thr;
                 const double red = over >= 0.5 * knee ? over
                                                       : (over + 0.5 * knee) * (over + 0.5 * knee) / (2.0 * knee);
-                target = std::pow (10.0, -red * ratioSlope * 0.05);
+                target = std::pow (10.0, -red * ratioSlope * wBin[(size_t) k] * 0.05);
                 any = true;
             }
             tgt[(size_t) k] = target;
@@ -618,6 +648,10 @@ private:
     long long t = 0;
     long long frameCount = 0;
     double relS = 0.9, atkS = 1.0, ratioSlope = 1.0;
+    std::vector<double> wBin;
+    CurvePoint wCurve[kMaxCurvePoints];
+    double wBalance = 0.0;
+    bool wCurveValid = false;
 
     int lookahead = 96, delay = 103, dpos = 0;
     SlidingMin smin;
@@ -626,8 +660,8 @@ private:
     std::vector<double> dlL, dlR;
     double gPrev = 1.0, relB = 0.999, ceilLin = 0.891, ceilDet = 0.856;
 
-    double gainTarget = 1.0, balLTarget = 1.0, balRTarget = 1.0;
-    double gainSm = 1.0, balLSm = 1.0, balRSm = 1.0, smoothCoef = 0.001;
+    double gainTarget = 1.0;
+    double gainSm = 1.0, smoothCoef = 0.001;
 };
 
 } // namespace sl

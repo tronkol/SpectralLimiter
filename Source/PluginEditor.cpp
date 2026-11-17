@@ -155,6 +155,227 @@ void SpectrumDisplay::paint (juce::Graphics& g)
     const float ty = yOf (thr);
     const float dash[] = { 5.0f, 4.0f };
     g.drawDashedLine (juce::Line<float> (area.getX(), ty, area.getRight(), ty), dash, 2, 1.0f);
+
+    drawCurve (g);
+}
+
+//==============================================================================
+// Curva di focus: punti trascinabili. x = frequenza, y = guadagno (shelf/peak); rotella = Q.
+juce::Rectangle<float> SpectrumDisplay::plotArea() const
+{
+    return getLocalBounds().toFloat().reduced (10.0f, 8.0f).withTrimmedBottom (14.0f).withTrimmedLeft (26.0f);
+}
+
+float SpectrumDisplay::xOfFreq (float f) const
+{
+    const auto a = plotArea();
+    return a.getX() + freqToX (juce::jlimit (20.0f, fMax(), f), 20.0f, fMax(), a.getWidth());
+}
+
+float SpectrumDisplay::freqOfX (float x) const
+{
+    const auto a = plotArea();
+    const float t = juce::jlimit (0.0f, 1.0f, (x - a.getX()) / a.getWidth());
+    return 20.0f * std::pow (fMax() / 20.0f, t);
+}
+
+float SpectrumDisplay::getP (const char* key, int i) const
+{
+    return apvts.getRawParameterValue (SpectralLimiterProcessor::curveId (key, i))->load();
+}
+
+void SpectrumDisplay::setP (const char* key, int i, float v)
+{
+    if (auto* p = apvts.getParameter (SpectralLimiterProcessor::curveId (key, i)))
+        p->setValueNotifyingHost (p->convertTo0to1 (v));
+}
+
+void SpectrumDisplay::gesture (int i, bool begin)
+{
+    for (const char* k : { "type", "freq", "gain", "q" })
+        if (auto* p = apvts.getParameter (SpectralLimiterProcessor::curveId (k, i)))
+        {
+            if (begin) p->beginChangeGesture(); else p->endChangeGesture();
+        }
+}
+
+sl::CurvePoint SpectrumDisplay::readPoint (int i) const
+{
+    sl::CurvePoint c;
+    c.type = juce::jlimit (0, 5, (int) std::lround (getP ("type", i)));
+    c.freq = getP ("freq", i);
+    c.gainDb = getP ("gain", i);
+    c.q = getP ("q", i);
+    return c;
+}
+
+juce::Point<float> SpectrumDisplay::pointPos (int i) const
+{
+    const auto c = readPoint (i);
+    const float db = (c.type == sl::kLowCut || c.type == sl::kHighCut) ? 0.0f : (float) c.gainDb; // i cut si spostano solo in frequenza
+    return { xOfFreq ((float) c.freq), yOfCurve (db) };
+}
+
+int SpectrumDisplay::hitTest (juce::Point<float> p) const
+{
+    int best = -1;
+    float bestD = 12.0f;
+    for (int i = 0; i < sl::kMaxCurvePoints; ++i)
+    {
+        if (readPoint (i).type == sl::kOff) continue;
+        const float d = pointPos (i).getDistanceFrom (p);
+        if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+}
+
+void SpectrumDisplay::mouseMove (const juce::MouseEvent& e)
+{
+    const int h = hitTest (e.position);
+    if (h != hoverIdx) { hoverIdx = h; repaint(); }
+}
+
+void SpectrumDisplay::mouseDown (const juce::MouseEvent& e)
+{
+    const int h = hitTest (e.position);
+    if (h < 0) return;
+    if (e.mods.isPopupMenu())
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Low cut");
+        m.addItem (2, "Low shelf");
+        m.addItem (3, "Peak");
+        m.addItem (4, "High shelf");
+        m.addItem (5, "High cut");
+        m.addSeparator();
+        m.addItem (6, "Elimina punto");
+        juce::Component::SafePointer<SpectrumDisplay> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options(), [safe, h] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            safe->gesture (h, true);
+            safe->setP ("type", h, r == 6 ? 0.0f : (float) r);
+            safe->gesture (h, false);
+            safe->repaint();
+        });
+        return;
+    }
+    dragIdx = h;
+    gesture (h, true);
+}
+
+void SpectrumDisplay::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragIdx < 0) return;
+    setP ("freq", dragIdx, freqOfX (e.position.x));
+    const int t = (int) std::lround (getP ("type", dragIdx));
+    if (t == sl::kLowShelf || t == sl::kPeak || t == sl::kHighShelf)
+        setP ("gain", dragIdx, curveOfY (e.position.y));
+    repaint();
+}
+
+void SpectrumDisplay::mouseUp (const juce::MouseEvent&)
+{
+    if (dragIdx >= 0) gesture (dragIdx, false);
+    dragIdx = -1;
+}
+
+void SpectrumDisplay::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    const int h = hitTest (e.position);
+    if (h >= 0)
+    {
+        gesture (h, true);
+        setP ("type", h, 0.0f);
+        gesture (h, false);
+        hoverIdx = -1;
+        repaint();
+        return;
+    }
+    for (int i = 0; i < sl::kMaxCurvePoints; ++i)
+        if (readPoint (i).type == sl::kOff)
+        {
+            gesture (i, true);
+            setP ("type", i, (float) sl::kPeak);
+            setP ("freq", i, freqOfX (e.position.x));
+            setP ("gain", i, curveOfY (e.position.y));
+            setP ("q", i, 1.0f);
+            gesture (i, false);
+            repaint();
+            return;
+        }
+}
+
+void SpectrumDisplay::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    const int h = hitTest (e.position);
+    if (h < 0) return;
+    const float q = juce::jlimit (0.3f, 8.0f, getP ("q", h) * std::exp (w.deltaY * 0.8f));
+    gesture (h, true);
+    setP ("q", h, q);
+    gesture (h, false);
+    repaint();
+}
+
+void SpectrumDisplay::drawCurve (juce::Graphics& g)
+{
+    const auto area = plotArea();
+    sl::CurvePoint pts[sl::kMaxCurvePoints];
+    int active = 0;
+    for (int i = 0; i < sl::kMaxCurvePoints; ++i)
+    {
+        pts[i] = readPoint (i);
+        if (pts[i].type != sl::kOff) ++active;
+    }
+    const juce::Colour curveCol (0xff62e0a8);
+
+    // riga dello 0 dB (intervento pieno)
+    g.setColour (curveCol.withAlpha (0.25f));
+    g.drawHorizontalLine ((int) yOfCurve (0.0f), area.getX(), area.getRight());
+
+    juce::Path path;
+    const int n = 240;
+    for (int i = 0; i <= n; ++i)
+    {
+        const float x = area.getX() + area.getWidth() * (float) i / (float) n;
+        const double c = std::max (-24.0, std::min (6.0, sl::curveTotalDb (pts, sl::kMaxCurvePoints, (double) freqOfX (x))));
+        const float y = yOfCurve ((float) c);
+        if (i == 0) path.startNewSubPath (x, y); else path.lineTo (x, y);
+    }
+    g.setColour (curveCol.withAlpha (active > 0 ? 0.95f : 0.45f));
+    g.strokePath (path, juce::PathStrokeType (1.6f));
+
+    for (int i = 0; i < sl::kMaxCurvePoints; ++i)
+    {
+        if (pts[i].type == sl::kOff) continue;
+        const auto pos = pointPos (i);
+        const float r = (i == hoverIdx || i == dragIdx) ? 6.5f : 5.0f;
+        g.setColour (ui::bg);
+        g.fillEllipse (pos.x - r, pos.y - r, r * 2.0f, r * 2.0f);
+        g.setColour (curveCol);
+        g.drawEllipse (pos.x - r, pos.y - r, r * 2.0f, r * 2.0f, 1.8f);
+    }
+
+    if (hoverIdx >= 0 && pts[hoverIdx].type != sl::kOff)
+    {
+        static const char* names[] = { "", "Low cut", "Low shelf", "Peak", "High shelf", "High cut" };
+        const auto& c = pts[hoverIdx];
+        juce::String f = c.freq >= 1000.0 ? juce::String (c.freq / 1000.0, 2) + " kHz" : juce::String ((int) c.freq) + " Hz";
+        juce::String txt = juce::String (names[c.type]) + "  " + f;
+        if (c.type == sl::kLowShelf || c.type == sl::kPeak || c.type == sl::kHighShelf)
+            txt << "  " << juce::String (c.gainDb, 1) << " dB";
+        txt << "  Q " << juce::String (c.q, 2);
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.setColour (ui::text);
+        g.drawText (txt, (int) area.getX() + 6, (int) area.getY() + 2, 300, 14, juce::Justification::centredLeft);
+    }
+    else if (active == 0)
+    {
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.setColour (ui::dim);
+        g.drawText ("Focus: doppio click per aggiungere un punto, tasto destro per il tipo, rotella per la Q",
+                    (int) area.getX() + 6, (int) area.getY() + 2, (int) area.getWidth() - 12, 14, juce::Justification::centredLeft);
+    }
 }
 
 //==============================================================================
@@ -215,7 +436,7 @@ void SpectralLimiterEditor::setupKnob (Knob& k, const juce::String& id, const ju
 }
 
 SpectralLimiterEditor::SpectralLimiterEditor (SpectralLimiterProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), display (engPtr)
+    : AudioProcessorEditor (&p), proc (p), display (engPtr, p.apvts)
 {
     setLookAndFeel (&laf);
     setSize (780, 460);

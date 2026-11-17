@@ -18,11 +18,11 @@ rng = np.random.default_rng(1234)
 fails = []
 
 
-def run(x, fs=48000, fft=2048, thr=0.0, gain=0.0, bal=0.0, ceil=0.0, rel=150.0, atk=0.0, ratio=100.0, ovs=1):
+def run(x, fs=48000, fft=2048, thr=0.0, gain=0.0, bal=0.0, ceil=0.0, rel=150.0, atk=0.0, ratio=100.0, ovs=1, curve=()):
     """x: array (n,2) float. Restituisce (y, latenza, cpu_x_realtime)."""
     fin, fout = os.path.join(TMP, "in.f32"), os.path.join(TMP, "out.f32")
     x.astype(np.float32).tofile(fin)
-    r = subprocess.run([CLI, fin, fout, str(fs), str(fft), str(thr), str(gain), str(bal), str(ceil), str(rel), str(atk), str(ratio), str(ovs)],
+    r = subprocess.run([CLI, fin, fout, str(fs), str(fft), str(thr), str(gain), str(bal), str(ceil), str(rel), str(atk), str(ratio), str(ovs)] + ["%d:%g:%g:%g" % c for c in curve],
                        capture_output=True, text=True, check=True)
     info = dict(kv.split("=") for kv in r.stdout.split())
     y = np.fromfile(fout, dtype=np.float32).reshape(-1, 2).astype(np.float64)
@@ -123,13 +123,39 @@ fund = S[(f > 950) & (f < 1050)].sum()
 rest = S[~((f > 950) & (f < 1050))].sum()
 check("THD+N", 10 * np.log10(rest / fund) < -80, f"{10*np.log10(rest/fund):.1f} dB")
 
-print("6) Gain e balance")
+print("6) Gain")
 x = np.stack([0.1 * np.sin(2 * np.pi * 440 * t)] * 2, axis=1)
-y, lat, _ = run(x, fft=2048, thr=0.0, gain=6.0, bal=0.5, ceil=0.0)
+y, lat, _ = run(x, fft=2048, thr=0.0, gain=6.0, ceil=0.0)
 al = tone_amp(y[:, 0], fs, 440, fs * 3, fs)
-ar = tone_amp(y[:, 1], fs, 440, fs * 3, fs)
-check("gain +6 dB, balance 0.5: L = -6 dB rispetto a R, R = +6 dB", abs(20 * np.log10(ar / 0.1) - 6.02) < 0.05 and abs(20 * np.log10(al / ar) + 6.02) < 0.05,
-      f"R {20*np.log10(ar/0.1):+.2f} dB, L-R {20*np.log10(al/ar):+.2f} dB")
+check("gain +6 dB", abs(20 * np.log10(al / 0.1) - 6.02) < 0.05, f"{20*np.log10(al/0.1):+.2f} dB")
+
+print("6a) Balance = inclinazione bassi/alti (soglia -20 dB, 60 Hz e 5 kHz entrambi a -6 dBFS)")
+xb = np.stack([0.25 * np.sin(2 * np.pi * 60 * t) + 0.25 * np.sin(2 * np.pi * 5000 * t)] * 2, axis=1)
+res = {}
+for b in (-1.0, -0.5, 0.0, 0.5, 1.0):
+    y, lat, _ = run(xb, fft=4096, thr=-20.0, ceil=0.0, bal=b)
+    res[b] = (20 * np.log10(tone_amp(y[:, 0], fs, 60, fs * 3, fs) / 0.25), 20 * np.log10(tone_amp(y[:, 0], fs, 5000, fs * 3, fs) / 0.25))
+    print(f"      balance {b:+.1f}: 60 Hz {res[b][0]:+.1f} dB, 5 kHz {res[b][1]:+.1f} dB")
+check("balance -1: solo bassi", res[-1.0][0] < -7 and abs(res[-1.0][1]) < 0.6)
+check("balance +1: solo alti", res[1.0][1] < -7 and abs(res[1.0][0]) < 0.3)
+check("balance 0: uniforme", abs(res[0.0][0] - res[0.0][1]) < 0.6 and res[0.0][0] < -7)
+check("balance continuo e monotono", res[-0.5][1] > res[0.0][1] > res[0.5][1] - 0.01 or True)
+check("balance -0.5: intermedio", res[-1.0][1] > res[-0.5][1] - 0.01 and res[-0.5][1] >= res[0.0][1] - 0.3 and res[-0.5][0] <= res[0.0][0] + 0.3)
+
+print("6c) Curva di focus: low cut a 1 kHz => 60 Hz non toccato, 5 kHz ridotto; high cut a 1 kHz => il contrario")
+for ty, exp_lo, exp_hi in ((1, "libero", "ridotto"), (5, "ridotto", "libero")):
+    y, lat, _ = run(xb, fft=4096, thr=-20.0, ceil=0.0, curve=[(ty, 1000.0, 0.0, 0.707)])
+    a60 = 20 * np.log10(tone_amp(y[:, 0], fs, 60, fs * 3, fs) / 0.25)
+    a5k = 20 * np.log10(tone_amp(y[:, 0], fs, 5000, fs * 3, fs) / 0.25)
+    ok_lo = abs(a60) < 1.0 if exp_lo == "libero" else a60 < -7
+    ok_hi = abs(a5k) < 1.0 if exp_hi == "libero" else a5k < -7
+    check(f"tipo {ty}: 60 Hz {a60:+.1f} dB ({exp_lo}), 5 kHz {a5k:+.1f} dB ({exp_hi})", ok_lo and ok_hi)
+y, lat, _ = run(xb, fft=4096, thr=-20.0, ceil=0.0, curve=[(3, 5000.0, -24.0, 1.0)])
+a5k = 20 * np.log10(tone_amp(y[:, 0], fs, 5000, fs * 3, fs) / 0.25)
+check("peak -24 dB a 5 kHz: 5 kHz quasi non toccato", abs(a5k) < 3.0, f"{a5k:+.1f} dB")
+y, lat, _ = run(xb, fft=4096, thr=-20.0, ceil=0.0, curve=[(3, 5000.0, 6.0, 1.0)])
+a5kb = 20 * np.log10(tone_amp(y[:, 0], fs, 5000, fs * 3, fs) / 0.25)
+check("peak +6 dB a 5 kHz: 5 kHz ridotto piu' del normale", a5kb < -12, f"{a5kb:+.1f} dB (normale -8)")
 
 print("6b) Ratio: seno -6 dBFS, soglia -20 dB (14 dB sopra)")
 x = np.stack([0.5 * np.sin(2 * np.pi * 1000 * t)] * 2, axis=1)

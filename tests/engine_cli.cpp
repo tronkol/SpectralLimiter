@@ -26,6 +26,15 @@ int main (int argc, char** argv)
     if (argc > 10) p.attackMs = std::atof (argv[10]);
     if (argc > 11) p.ratio = std::atof (argv[11]);
     const int os = argc > 12 ? std::atoi (argv[12]) : 1;
+    // punti della curva di focus: type:freq:gain:q
+    for (int i = 13; i < argc && i - 13 < sl::kMaxCurvePoints; ++i)
+    {
+        int ty = 0; double fr = 1000, ga = 0, q = 1;
+        if (std::sscanf (argv[i], "%d:%lf:%lf:%lf", &ty, &fr, &ga, &q) == 4)
+        {
+            p.curve[i - 13].type = ty; p.curve[i - 13].freq = fr; p.curve[i - 13].gainDb = ga; p.curve[i - 13].q = q;
+        }
+    }
 
     FILE* f = std::fopen (argv[1], "rb");
     if (! f) { std::fprintf (stderr, "input non trovato\n"); return 1; }
