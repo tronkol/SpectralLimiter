@@ -15,13 +15,13 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Ad-hoc codesign
         run: |
-          for f in $(find build -name "*.vst3" -o -name "*.component" -o -name "*.app" | grep "_artefacts"); do
+          find build -maxdepth 6 -path "*_artefacts/Release/*" \( -name "*.vst3" -o -name "*.component" -o -name "*.app" \) -print0 | while IFS= read -r -d '' f; do
             codesign --force --deep -s - "$f"
           done
       - name: Raccogli
         run: |
           mkdir -p out
-          find build -path "*_artefacts/Release/*" \( -name "*.vst3" -o -name "*.component" -o -name "*.app" \) -maxdepth 6 -exec cp -R {} out/ \;
+          find build -maxdepth 6 -path "*_artefacts/Release/*" \( -name "*.vst3" -o -name "*.component" -o -name "*.app" \) -exec cp -R {} out/ \;
           cd out && zip -r ../LimiterSpettrale-macOS.zip . && cd ..
       - uses: actions/upload-artifact@v4
         with:
