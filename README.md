@@ -1,11 +1,17 @@
-# Limiter Spettrale
+# CONTROLUNA SAUCE
 
 Limiter multibanda "a FFT": ogni bin di frequenza ha il suo limiter (da 513 a 32769 bande), seguito da un brickwall true-peak.
 Formati: VST3, AU, Standalone. Stereo, fino a 48 kHz (a frequenze più alte il codice gira, ma non è stato verificato).
 
 ## Controlli
-- **Threshold** (−48…0 dB): livello oltre cui ogni banda viene limitata. Il livello di banda è l'ampiezza equivalente-sinusoide, quindi un seno a −20 dBFS con soglia −20 dB non viene toccato.
+- **Threshold** (−60…0 dB): livello oltre cui ogni banda viene limitata. Il livello di banda è l'ampiezza equivalente-sinusoide, quindi un seno a −20 dBFS con soglia −20 dB non viene toccato.
 - **Ratio** (1:1…inf:1, default inf): rapporto di riduzione per banda sopra la soglia. Con inf è un limiter vero; con valori più bassi la soglia diventa un compressore multibanda spettrale (il brickwall al Ceiling resta sempre attivo).
+- **Compensation** (0…100%) e tasto **Dynamic**: compensazione spettrale automatica, banda per banda. Il motore misura il livello medio (in dB) di ogni banda e lo confronta con il livello medio dello spettro; la soglia di ogni banda si sposta di conseguenza. Così le bande naturalmente più forti (i bassi di un mix) non lavorano più delle altre: a 0% la soglia è la stessa per tutte le bande, a 100% la riduzione è praticamente uguale su tutto lo spettro (misurato su rumore rosa: bassi e alti 20,6 / 10,2 dB a 0%, 15,6 / 13,2 dB a 100%). Con Dynamic spento il profilo è lento (~8 s): è la forma tonale del brano. Con Dynamic acceso ogni banda segue il proprio livello recente (~0,25 s): il limiter lavora sui picchi di ogni banda rispetto al suo livello e lascia passare più a lungo i passaggi sostenuti. La linea tratteggiata sul display è la soglia effettiva di ogni banda.
+- **Ratio** parte da 1:1 e **Balance/Compensation/curva** partono piatti: all'apertura lo stadio spettrale non fa nulla (resta solo il brickwall sul Ceiling). Alza il Ratio per attivare l'intervento.
+- **Resonance** (0…100%, sperimentale): sopprime i picchi stretti che sporgono più di 3 dB sopra l'inviluppo locale dello spettro (±25% di frequenza), tipo tamer di risonanze. Rispetta la curva di focus. Misurato: un picco a 2 kHz scende di 6,4 dB al 50% e 12,7 dB al 100%, il resto dello spettro cambia meno di 1 dB.
+- **Release Tilt** (−100…+100%, sperimentale): rilascio dipendente dalla frequenza. Positivo = bassi lenti e alti veloci (fino a 8× più lento / 8× più veloce del Release), negativo il contrario.
+- **LEARN** (tasto, sperimentale): la riduzione di ogni banda si accumula e non viene mai rilasciata. Suona la parte più forte del brano con LEARN acceso: il limiter si trasforma in un EQ spettrale statico che ricorda la riduzione massima. Spegni il tasto per tornare al rilascio normale.
+- **Range** (0…60 dB, default 60): riduzione massima per banda dello stadio spettrale.
 - **Curva di focus** (stile Soothe, sul display): fino a 6 punti che pesano quanto il limiter interviene in ogni zona. Doppio click su un punto vuoto del display = aggiungi un punto (Peak); trascina per frequenza e guadagno; rotella = Q; tasto destro = cambia tipo (Low cut, Low shelf, Peak, High shelf, High cut) o elimina; doppio click su un punto = elimina. La riga a 0 dB è l'intervento pieno; sotto lo 0 il limiter interviene meno in quella zona (−24 dB = quasi niente), sopra lo 0 interviene di più (fino a +6 dB = doppia riduzione). I cut sono a 12 dB/ott. Il brickwall finale sul Ceiling resta sempre attivo su tutto.
 - **Gain** (−12…+24 dB): guadagno dopo lo stadio spettrale e prima del brickwall.
 - **Balance** (bassi ← 0 → alti): sposta in modo continuo dove interviene il limiter. A 0 l'intervento è uniforme; verso −100% si concentra sui bassi (sopra ~8 kHz non interviene più), verso +100% sugli alti (sotto ~200 Hz non interviene più). In mezzo la transizione è graduale.
@@ -22,11 +28,15 @@ Latenza (48 kHz): 513 bande ≈ 24 ms, 2049 ≈ 88 ms (default), 8193 ≈ 344 ms
 2. Tab **Actions** → *Build macOS* → **Run workflow**.
 3. A fine build scarica l'artifact `LimiterSpettrale-macOS` e decomprimilo.
 
+## GUI
+La finestra si ridimensiona trascinando l'angolo in basso a destra (mantiene le proporzioni). Tema chiaro: bianco/avorio, manopole nere, accenti verdi. Il titolo è in Helvetica Bold.
+
 ## Installare
+Il plugin ora si chiama CONTROLUNA SAUCE: elimina il vecchio `Limiter Spettrale.component` / `.vst3` dalle cartelle dei plugin, altrimenti Logic ti mostra due versioni.
 - VST3 → `~/Library/Audio/Plug-Ins/VST3/`
 - AU (.component) → `~/Library/Audio/Plug-Ins/Components/`
 
-Se macOS lo blocca: `xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"Limiter Spettrale.vst3"` (idem per il .component). Per Logic riavvia e, se serve, rilancia la validazione AU.
+Se macOS lo blocca: `xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"CONTROLUNA SAUCE.vst3"` (idem per il .component). Per Logic riavvia e, se serve, rilancia la validazione AU.
 
 ## Build locale (non verificata)
 Servono Command Line Tools (`xcode-select --install`) e cmake: `cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build`.

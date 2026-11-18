@@ -23,7 +23,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "Limiter Spettrale"; }
+    const juce::String getName() const override { return "CONTROLUNA SAUCE"; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
@@ -60,7 +60,7 @@ private:
     void ensureSlot (int slot);
 
     std::atomic<float>* pThr; std::atomic<float>* pGain; std::atomic<float>* pBal;
-    std::atomic<float>* pCeil; std::atomic<float>* pRel; std::atomic<float>* pAtk; std::atomic<float>* pRatio; std::atomic<float>* pOs;
+    std::atomic<float>* pCeil; std::atomic<float>* pRel; std::atomic<float>* pAtk; std::atomic<float>* pRatio; std::atomic<float>* pOs; std::atomic<float>* pComp; std::atomic<float>* pDyn; std::atomic<float>* pRange; std::atomic<float>* pRes; std::atomic<float>* pLearn; std::atomic<float>* pRelTilt;
     std::atomic<float>* cType[sl::kMaxCurvePoints]; std::atomic<float>* cFreq[sl::kMaxCurvePoints];
     std::atomic<float>* cGain[sl::kMaxCurvePoints]; std::atomic<float>* cQ[sl::kMaxCurvePoints]; std::atomic<float>* pBands;
 

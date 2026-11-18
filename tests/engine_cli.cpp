@@ -26,13 +26,19 @@ int main (int argc, char** argv)
     if (argc > 10) p.attackMs = std::atof (argv[10]);
     if (argc > 11) p.ratio = std::atof (argv[11]);
     const int os = argc > 12 ? std::atoi (argv[12]) : 1;
-    // punti della curva di focus: type:freq:gain:q
-    for (int i = 13; i < argc && i - 13 < sl::kMaxCurvePoints; ++i)
+    if (argc > 13) p.compensation = std::atof (argv[13]);
+    if (argc > 14) p.dynamicComp = std::atoi (argv[14]) != 0;
+    if (argc > 15) p.maxReductionDb = std::atof (argv[15]);
+    if (argc > 16) p.resonance = std::atof (argv[16]);
+    if (argc > 17) p.hold = std::atoi (argv[17]) != 0;
+    if (argc > 18) p.releaseTilt = std::atof (argv[18]);
+    // punti della curva di focus: type:freq:gain:q (da argv[19])
+    for (int i = 19; i < argc && i - 19 < sl::kMaxCurvePoints; ++i)
     {
         int ty = 0; double fr = 1000, ga = 0, q = 1;
         if (std::sscanf (argv[i], "%d:%lf:%lf:%lf", &ty, &fr, &ga, &q) == 4)
         {
-            p.curve[i - 13].type = ty; p.curve[i - 13].freq = fr; p.curve[i - 13].gainDb = ga; p.curve[i - 13].q = q;
+            p.curve[i - 19].type = ty; p.curve[i - 19].freq = fr; p.curve[i - 19].gainDb = ga; p.curve[i - 19].q = q;
         }
     }
 

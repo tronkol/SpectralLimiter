@@ -3,14 +3,25 @@
 
 namespace ui
 {
-    const juce::Colour bg      { 0xff17191d };
-    const juce::Colour panel   { 0xff1f2228 };
-    const juce::Colour grid    { 0xff2c3038 };
-    const juce::Colour text    { 0xffd9dde3 };
-    const juce::Colour dim     { 0xff7d8591 };
-    const juce::Colour accent  { 0xffff8a2a }; // riduzione
-    const juce::Colour blue    { 0xff4fb0ff }; // ingresso / uscita
+    // tema chiaro: sfondo bianco/avorio, manopole e testi nero/grigi, accenti verdi
+    const juce::Colour bg      { 0xfff3f3f0 }; // sfondo
+    const juce::Colour panel   { 0xffffffff }; // pannelli
+    const juce::Colour grid    { 0xffdcdcd8 }; // griglie, tracce
+    const juce::Colour text    { 0xff141414 }; // nero
+    const juce::Colour dim     { 0xff7a7a76 }; // grigio
+    const juce::Colour dark    { 0xff1c1c1e }; // corpo manopole
+    const juce::Colour mid     { 0xff3a3a3c };
+    const juce::Colour accent  { 0xff22c55e }; // verde
+    const juce::Colour green   { 0xff22c55e };
+    constexpr int kDesignW = 780, kDesignH = 650; // dimensioni di progetto, la GUI si scala da qui
 }
+
+// Tela di disegno a dimensioni fisse: l'editor la scala con una trasformazione.
+class Canvas : public juce::Component
+{
+public:
+    void paint (juce::Graphics&) override;
+};
 
 class LimiterLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -19,6 +30,10 @@ public:
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
     void drawComboBox (juce::Graphics&, int w, int h, bool, int, int, int, int, juce::ComboBox&) override;
     juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::Font (juce::FontOptions (13.0f)); }
+    void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float sliderPos, float minPos, float maxPos,
+                           juce::Slider::SliderStyle, juce::Slider&) override;
+    int getSliderThumbRadius (juce::Slider&) override { return 7; }
+    void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool highlighted, bool down) override;
 };
 
 class SpectrumDisplay : public juce::Component
@@ -54,7 +69,7 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     int dragIdx = -1, hoverIdx = -1;
     float thr = -18.0f;
-    std::array<float, sl::Engine::kDisplayPoints> in {}, out {}, gr {};
+    std::array<float, sl::Engine::kDisplayPoints> in {}, out {}, gr {}, thrv {};
     float fs = 48000.0f;
 public:
     void setSampleRate (float f) { fs = f; }
@@ -74,7 +89,6 @@ class SpectralLimiterEditor : public juce::AudioProcessorEditor, private juce::T
 public:
     explicit SpectralLimiterEditor (SpectralLimiterProcessor&);
     ~SpectralLimiterEditor() override;
-    void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
@@ -84,6 +98,7 @@ private:
     LimiterLookAndFeel laf;
     const sl::Engine* engPtr = nullptr;
 
+    Canvas content;
     SpectrumDisplay display;
     MeterBar meter;
 
@@ -93,7 +108,19 @@ private:
         juce::Label name, value;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
     };
-    Knob kThr, kRatio, kGain, kBal, kAtk, kRel, kCeil;
+    struct HSlider
+    {
+        juce::Slider slider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+        juce::Label name, value;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
+    };
+    Knob kThr, kRatio, kAtk, kRel, kGain, kCeil;
+    HSlider sBal, sComp, sRange, sRes, sRelTilt;
+    juce::TextButton dynButton { "DYNAMIC" };
+    juce::TextButton learnButton { "LEARN" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> learnAtt;
+    juce::Label learnHint;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> dynAtt;
     juce::ComboBox bands;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> bandsAtt;
     juce::ComboBox oversampling;
@@ -101,6 +128,7 @@ private:
     juce::Label bandsLabel, latencyLabel;
 
     void setupKnob (Knob&, const juce::String& paramId, const juce::String& label);
+    void setupSlider (HSlider&, const juce::String& paramId, const juce::String& label);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpectralLimiterEditor)
 };

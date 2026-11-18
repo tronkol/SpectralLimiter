@@ -2,7 +2,7 @@
 // Motore DSP del Limiter Spettrale. Header-only, C++17, nessuna dipendenza (niente JUCE):
 // si compila e si collauda da solo (vedi tests/).
 //
-// Catena:   balance -> STFT spettrale (una banda di guadagno per bin) -> gain
+// Catena:   STFT spettrale (una banda di guadagno per bin) -> gain
 //           -> brickwall lookahead con rilevazione true-peak 8x -> ceiling
 //
 //  * Stadio spettrale: FFT con finestra Hann in analisi e sintesi, overlap 87.5% (hop = N/8). Ogni bin ha il suo
@@ -263,12 +263,19 @@ public:
         double ratio       = 100.0; // >= 100 = infinito (limiter vero); 1 = nessuna riduzione
         CurvePoint curve[kMaxCurvePoints]; // curva di focus (punti con type == kOff sono ignorati)
         double attackMs    = 0.0;   // attacco dello stadio spettrale (0 = istantaneo); per frame, minimo = hop
+        double compensation = 0.0;  // 0..1: la soglia di ogni banda segue il suo livello medio rispetto allo spettro medio
+        bool   dynamicComp = false; // false = profilo lento (~8 s), true = ogni banda segue il proprio livello (~0.25 s)
+        double maxReductionDb = 60.0; // riduzione massima per banda nello stadio spettrale
+        double resonance = 0.0;     // 0..1: sopprime i picchi stretti sopra l'inviluppo locale dello spettro
+        bool   hold = false;        // "Learn": la riduzione per banda si accumula e non viene mai rilasciata
+        double releaseTilt = 0.0;   // -1..+1: +1 = bassi con rilascio lento e alti veloce, -1 il contrario
     };
 
     // Dati per l'interfaccia (scritti dal thread audio, letti dalla UI).
     std::atomic<float> dispIn[kDisplayPoints];   // spettro in ingresso, dB
     std::atomic<float> dispOut[kDisplayPoints];  // spettro dopo lo stadio spettrale, dB
     std::atomic<float> dispGR[kDisplayPoints];   // riduzione per banda, dB (<= 0)
+    std::atomic<float> dispThr[kDisplayPoints];  // soglia effettiva per banda (con compensazione), dB
     std::atomic<float> meterGRdb { 0.0f };       // riduzione massima brickwall dell'ultimo blocco, dB (<= 0)
     std::atomic<float> meterOutDb { -120.0f };   // picco in uscita dell'ultimo blocco, dB
 
@@ -279,6 +286,7 @@ public:
             dispIn[i].store (-120.0f);
             dispOut[i].store (-120.0f);
             dispGR[i].store (0.0f);
+            dispThr[i].store (-18.0f);
         }
     }
 
@@ -328,6 +336,28 @@ public:
             for (auto& w : smoothK) w /= s;
         }
         wBin.assign ((size_t) nb, 1.0);
+        aDbv.assign ((size_t) nb, -100.0);
+        envPrefix.assign ((size_t) nb + 1, 0.0);
+        resRed.assign ((size_t) nb, 0.0);
+        relSbin.assign ((size_t) nb, 0.9);
+        relValid = false;
+        lvl.assign ((size_t) nb, -100.0);
+        lvlPrefix.assign ((size_t) nb + 1, 0.0);
+        thrK.assign ((size_t) nb, -18.0);
+        offK.assign ((size_t) nb, 0.0);
+        {
+            wRef.assign ((size_t) nb, 0.0);
+            const double bh = fs / N;
+            int kLo = std::max (1, (int) std::ceil (30.0 / bh));
+            int kHi = std::min (nb - 1, (int) std::floor (std::min (16000.0, 0.499 * dispFs) / bh));
+            if (kHi <= kLo) { kLo = 1; kHi = std::max (1, nb - 1); }
+            double sum = 0.0;
+            for (int k = kLo; k <= kHi; ++k) { wRef[(size_t) k] = 1.0 / (double) (k + 1); sum += wRef[(size_t) k]; } // ~ uniforme in frequenza log
+            for (auto& v : wRef) v /= sum;
+        }
+        lvlCoefStatic = 1.0 - std::exp (-(double) H / (8.0 * fs));
+        lvlCoefDyn = 1.0 - std::exp (-(double) H / (0.25 * fs));
+        levelFrames = 0;
         wCurveValid = false;
         halfW.assign ((size_t) nb, 2);
         for (int k = 0; k < nb; ++k)
@@ -358,6 +388,8 @@ public:
         std::fill (olaL.begin(), olaL.end(), 0.0); std::fill (olaR.begin(), olaR.end(), 0.0);
         std::fill (gain.begin(), gain.end(), 1.0);
         std::fill (dlL.begin(), dlL.end(), 0.0);  std::fill (dlR.begin(), dlR.end(), 0.0);
+        std::fill (lvl.begin(), lvl.end(), -100.0);
+        levelFrames = 0;
         t = 0; frameCount = 0; dpos = 0; gPrev = 1.0;
         smin.reset(); box1.reset(); box2.reset(); tp.reset();
         gainSm = gainTarget;
@@ -375,6 +407,7 @@ public:
         relB = std::exp (-1.0 / (tau * fs));
         const double tauS = std::max (tau, 2.0 * H / fs);
         relS = std::exp (-(double) H / (tauS * fs));
+        updateRelease();
         ratioSlope = p.ratio >= 100.0 ? 1.0 : 1.0 - 1.0 / std::max (1.0, p.ratio);
         atkS = p.attackMs <= 0.5 ? 1.0 : 1.0 - std::exp (-(double) H / (p.attackMs * 1e-3 * fs));
     }
@@ -422,6 +455,35 @@ private:
         inR[(size_t) slot] = inr;
         if (((t + 1) & (H - 1)) == 0) processFrame();
         ++t;
+    }
+
+    // Rilascio per bin: il rilascio nominale scalato in funzione della frequenza (Release Tilt), su griglia log.
+    void updateRelease()
+    {
+        if (relValid && params.releaseMs == relMsCached && params.releaseTilt == relTiltCached) return;
+        relValid = true; relMsCached = params.releaseMs; relTiltCached = params.releaseTilt;
+        constexpr int G = 256;
+        constexpr double fLo = 20.0, fHi = 20000.0;
+        double grid[G];
+        const double ratio = std::log (fHi / fLo);
+        const double tau = std::max (params.releaseMs, 1.0) * 1e-3;
+        const double tilt = std::max (-1.0, std::min (1.0, params.releaseTilt));
+        for (int g = 0; g < G; ++g)
+        {
+            const double f = fLo * std::exp (ratio * g / (G - 1));
+            const double factor = std::max (0.125, std::min (8.0, std::pow (2.0, -tilt * std::log2 (f / 500.0))));
+            const double tk = std::max (tau * factor, 2.0 * H / fs);
+            grid[g] = std::exp (-(double) H / (tk * fs));
+        }
+        const double binHz = fs / N;
+        for (int k = 0; k < nb; ++k)
+        {
+            const double f = std::max (k * binHz, 1.0);
+            const double pos = std::max (0.0, std::min ((double) (G - 1), std::log (f / fLo) / ratio * (G - 1)));
+            const int i0 = std::min (G - 2, (int) pos);
+            const double fr = pos - i0;
+            relSbin[(size_t) k] = grid[i0] * (1.0 - fr) + grid[i0 + 1] * fr;
+        }
     }
 
     // Pesi per bin dalla curva di focus + balance. Calcolo su griglia log di 512 punti, poi interpolazione.
@@ -481,23 +543,81 @@ private:
             prefix[(size_t) k + 1] = prefix[(size_t) k] + m * m;
         }
 
-        // 1) guadagno bersaglio per bin (soglia sul livello di banda, knee morbido)
+        // 1) guadagno bersaglio per bin (soglia sul livello di banda, knee morbido).
+        //    Con la compensazione la soglia di ogni banda si sposta in base al suo livello medio (in dB)
+        //    rispetto al livello medio dello spettro: le bande naturalmente piu' forti (bassi) non lavorano di piu'.
         const double thr = params.thresholdDb;
         const double knee = 6.0;
-        const double lowLin2 = std::pow (10.0, (thr - 0.5 * knee) * 0.1);
-        bool any = false;
+        const double maxRed = std::max(0.0, params.maxReductionDb);
+        const double comp = std::max (0.0, std::min (1.0, params.compensation));
         for (int k = 0; k <= nh; ++k)
         {
             const int lo = std::max (0, k - halfW[(size_t) k]);
             const int hi = std::min (nh, k + halfW[(size_t) k]);
             const double a2 = (prefix[(size_t) hi + 1] - prefix[(size_t) lo]) / enbw;
-            double target = 1.0;
-            if (a2 > lowLin2)
+            aDbv[(size_t) k] = a2 > 1.0e-10 ? 10.0 * std::log10 (a2) : -100.0;
+        }
+        {
+            const double coef = params.dynamicComp ? lvlCoefDyn : lvlCoefStatic;
+            const double ce = std::max (coef, 1.0 / (1.0 + (double) levelFrames)); // media corrente all'inizio
+            if (levelFrames < 1000000) ++levelFrames;
+            for (int k = 0; k <= nh; ++k) lvl[(size_t) k] += (aDbv[(size_t) k] - lvl[(size_t) k]) * ce;
+        }
+        if (comp > 0.0005)
+        {
+            lvlPrefix[0] = 0.0;
+            for (int k = 0; k <= nh; ++k) lvlPrefix[(size_t) k + 1] = lvlPrefix[(size_t) k] + lvl[(size_t) k];
+            double lref = 0.0;
+            for (int k = 0; k <= nh; ++k)
             {
-                const double over = 10.0 * std::log10 (a2) - thr;
-                const double red = over >= 0.5 * knee ? over
-                                                      : (over + 0.5 * knee) * (over + 0.5 * knee) / (2.0 * knee);
-                target = std::pow (10.0, -red * ratioSlope * wBin[(size_t) k] * 0.05);
+                const int w = params.dynamicComp ? halfW[(size_t) k] : std::max (2, (int) std::lround (0.2 * k));
+                const int lo = std::max (0, k - w), hi = std::min (nh, k + w);
+                const double e = (lvlPrefix[(size_t) hi + 1] - lvlPrefix[(size_t) lo]) / (double) (hi - lo + 1);
+                offK[(size_t) k] = e; // livello medio di banda (provvisorio)
+                lref += wRef[(size_t) k] * e;
+            }
+            for (int k = 0; k <= nh; ++k)
+                offK[(size_t) k] = comp * std::max (-36.0, std::min (36.0, offK[(size_t) k] - lref));
+        }
+        else
+            std::fill (offK.begin(), offK.end(), 0.0);
+
+        // risonanze: picchi del livello di banda sopra l'inviluppo locale (media in dB su ~+-25% di frequenza)
+        const double resAmt = std::max (0.0, std::min (1.0, params.resonance));
+        const bool useRes = resAmt > 0.001;
+        if (useRes)
+        {
+            envPrefix[0] = 0.0;
+            for (int k = 0; k <= nh; ++k) envPrefix[(size_t) k + 1] = envPrefix[(size_t) k] + aDbv[(size_t) k];
+            for (int k = 0; k <= nh; ++k)
+            {
+                const int w = std::max (3, (int) std::lround (0.25 * k));
+                const int lo = std::max (0, k - w), hi = std::min (nh, k + w);
+                const double env = (envPrefix[(size_t) hi + 1] - envPrefix[(size_t) lo]) / (double) (hi - lo + 1);
+                const double ex = aDbv[(size_t) k] - env - 3.0; // tolleranza 3 dB
+                resRed[(size_t) k] = ex > 0.0 ? ex * resAmt : 0.0;
+            }
+        }
+
+        bool any = false;
+        for (int k = 0; k <= nh; ++k)
+        {
+            const double thrk = thr + offK[(size_t) k];
+            thrK[(size_t) k] = thrk;
+            const double over = aDbv[(size_t) k] - thrk;
+            double red = 0.0;
+            if (over > -0.5 * knee)
+            {
+                red = over >= 0.5 * knee ? over
+                                         : (over + 0.5 * knee) * (over + 0.5 * knee) / (2.0 * knee);
+                red *= ratioSlope * wBin[(size_t) k];
+            }
+            if (useRes) red += resRed[(size_t) k] * wBin[(size_t) k];
+            red = std::min (red, maxRed);
+            double target = 1.0;
+            if (red > 1.0e-4)
+            {
+                target = std::pow (10.0, -red * 0.05);
                 any = true;
             }
             tgt[(size_t) k] = target;
@@ -529,7 +649,7 @@ private:
             double& g = gain[(size_t) k];
             const double target = tgt[(size_t) k];
             if (target < g) g += (target - g) * atkS;
-            else g += (target - g) * (1.0 - relS);
+            else if (! params.hold) g += (target - g) * (1.0 - relSbin[(size_t) k]);
         }
 
         // applica i guadagni e ricostruisci lo spettro impacchettato
@@ -608,16 +728,18 @@ private:
         for (int p = 0; p < kDisplayPoints; ++p)
         {
             const int lo = dLo[(size_t) p], hi = dHi[(size_t) p];
-            double mi, mo, gmin;
+            double mi, mo, gmin, th;
             if (hi > lo)
             {
-                mi = 0.0; mo = 0.0; gmin = 1.0;
+                mi = 0.0; mo = 0.0; gmin = 1.0; th = 0.0;
                 for (int k = lo; k <= hi; ++k)
                 {
                     mi = std::max (mi, mag[(size_t) k]);
                     mo = std::max (mo, mag[(size_t) k] * gain[(size_t) k]);
                     gmin = std::min (gmin, gain[(size_t) k]);
+                    th += thrK[(size_t) k];
                 }
+                th /= (double) (hi - lo + 1);
             }
             else // intervallo piu' stretto di un bin: interpola per una curva liscia
             {
@@ -627,10 +749,12 @@ private:
                 mi = mag[(size_t) k0] * (1 - f) + mag[(size_t) k1] * f;
                 mo = mag[(size_t) k0] * gain[(size_t) k0] * (1 - f) + mag[(size_t) k1] * gain[(size_t) k1] * f;
                 gmin = gain[(size_t) k0] * (1 - f) + gain[(size_t) k1] * f;
+                th = thrK[(size_t) k0] * (1 - f) + thrK[(size_t) k1] * f;
             }
             dispIn[p].store ((float) linToDb (mi));
             dispOut[p].store ((float) linToDb (mo));
             dispGR[p].store ((float) linToDb (gmin));
+            dispThr[p].store ((float) th);
         }
     }
 
@@ -648,7 +772,11 @@ private:
     long long t = 0;
     long long frameCount = 0;
     double relS = 0.9, atkS = 1.0, ratioSlope = 1.0;
-    std::vector<double> wBin;
+    std::vector<double> wBin, aDbv, lvl, lvlPrefix, thrK, offK, wRef, envPrefix, resRed, relSbin;
+    bool relValid = false;
+    double relMsCached = 0.0, relTiltCached = 0.0;
+    double lvlCoefStatic = 0.001, lvlCoefDyn = 0.01;
+    int levelFrames = 0;
     CurvePoint wCurve[kMaxCurvePoints];
     double wBalance = 0.0;
     bool wCurveValid = false;

@@ -18,11 +18,11 @@ rng = np.random.default_rng(1234)
 fails = []
 
 
-def run(x, fs=48000, fft=2048, thr=0.0, gain=0.0, bal=0.0, ceil=0.0, rel=150.0, atk=0.0, ratio=100.0, ovs=1, curve=()):
+def run(x, fs=48000, fft=2048, thr=0.0, gain=0.0, bal=0.0, ceil=0.0, rel=150.0, atk=0.0, ratio=100.0, ovs=1, curve=(), comp=0.0, dyn=0, rng=60.0, res=0.0, hold=0, rtilt=0.0):
     """x: array (n,2) float. Restituisce (y, latenza, cpu_x_realtime)."""
     fin, fout = os.path.join(TMP, "in.f32"), os.path.join(TMP, "out.f32")
     x.astype(np.float32).tofile(fin)
-    r = subprocess.run([CLI, fin, fout, str(fs), str(fft), str(thr), str(gain), str(bal), str(ceil), str(rel), str(atk), str(ratio), str(ovs)] + ["%d:%g:%g:%g" % c for c in curve],
+    r = subprocess.run([CLI, fin, fout, str(fs), str(fft), str(thr), str(gain), str(bal), str(ceil), str(rel), str(atk), str(ratio), str(ovs), str(comp), str(dyn), str(rng), str(res), str(hold), str(rtilt)] + ["%d:%g:%g:%g" % c for c in curve],
                        capture_output=True, text=True, check=True)
     info = dict(kv.split("=") for kv in r.stdout.split())
     y = np.fromfile(fout, dtype=np.float32).reshape(-1, 2).astype(np.float64)
@@ -156,6 +156,98 @@ check("peak -24 dB a 5 kHz: 5 kHz quasi non toccato", abs(a5k) < 3.0, f"{a5k:+.1
 y, lat, _ = run(xb, fft=4096, thr=-20.0, ceil=0.0, curve=[(3, 5000.0, 6.0, 1.0)])
 a5kb = 20 * np.log10(tone_amp(y[:, 0], fs, 5000, fs * 3, fs) / 0.25)
 check("peak +6 dB a 5 kHz: 5 kHz ridotto piu' del normale", a5kb < -12, f"{a5kb:+.1f} dB (normale -8)")
+
+print("6d) Compensazione spettrale automatica (rumore rosa, soglia -40 dB): differenza di riduzione tra bassi e alti")
+def band_red(x_, y_, lat_, f0, f1):
+    xs = x_[fs * 8: fs * 18, 0]; ys = y_[lat_ + fs * 8: lat_ + fs * 18, 0]
+    from scipy.signal import welch
+    f, Px = welch(xs, fs, nperseg=16384); f, Py = welch(ys, fs, nperseg=16384)
+    m = (f >= f0) & (f < f1)
+    return 10 * np.log10(Py[m].sum() / Px[m].sum())
+xp = stereo_pink(fs * 20, -14)
+diffs = {}
+for comp in (0.0, 0.5, 1.0):
+    y, lat, _ = run(xp, fft=4096, thr=-40.0, ceil=0.0, comp=comp)
+    lo, hi = band_red(xp, y, lat, 80, 160), band_red(xp, y, lat, 6000, 10000)
+    diffs[comp] = lo - hi
+    print(f"      comp {comp:.1f}: 80-160 Hz {lo:.1f} dB, 6-10 kHz {hi:.1f} dB, differenza {lo-hi:.1f} dB")
+check("senza compensazione le basse lavorano molto di piu'", diffs[0.0] < -6)
+check("compensazione 100%: riduzione quasi uguale su bassi e alti", abs(diffs[1.0]) < 4 and abs(diffs[1.0]) < abs(diffs[0.0]) * 0.5)
+check("compensazione 50%: intermedia", abs(diffs[1.0]) < abs(diffs[0.5]) < abs(diffs[0.0]))
+
+print("6e) Range: riduzione massima per banda (60 Hz a -6 dBFS, soglia -60 dB)")
+x60 = np.stack([0.5 * np.sin(2 * np.pi * 60 * t)] * 2, axis=1)
+for rg, exp in ((60.0, -60.0), (20.0, -26.0)):
+    y, lat, _ = run(x60, fft=4096, thr=-60.0, ceil=0.0, rng=rg)
+    a = 20 * np.log10(tone_amp(y[:, 0], fs, 60, fs * 4, fs))
+    check(f"range {rg:.0f} dB: uscita {a:.1f} dBFS (atteso {exp})", abs(a - exp) < 1.0)
+
+print("6f) Dynamic: dopo un burst a 1 kHz sopra il rumore, la soglia della banda segue il livello recente")
+nn = fs * 14
+xd = stereo_pink(nn, -26)
+tb = np.arange(nn) / fs
+burst = (tb >= 8.0) & (tb < 10.0)
+xd[:, 0] += 0.2 * np.sin(2 * np.pi * 1000 * tb) * burst
+xd[:, 1] += 0.2 * np.sin(2 * np.pi * 1000 * tb) * burst
+levs = {}
+for dyn in (0, 1):
+    y, lat, _ = run(xd, fft=4096, thr=-40.0, ceil=0.0, comp=1.0, dyn=dyn)
+    seg = y[lat + int(8.6 * fs): lat + int(9.6 * fs), 0]
+    levs[dyn] = 20 * np.log10(tone_amp(y[:, 0], fs, 1000, lat + int(8.6 * fs), fs))
+    print(f"      dynamic={dyn}: 1 kHz a 0.6-1.6 s dal burst: {levs[dyn]:.1f} dBFS (ingresso -14)")
+check("dynamic: la banda segue il proprio livello, lascia passare di piu' del profilo lento", levs[1] > levs[0] + 1.5)
+
+print("6g) Resonance: picco stretto a 2 kHz su rumore rosa (soglia 0 dB, nessuna limitazione normale)")
+from scipy.signal import butter, sosfilt, welch as _welch
+nr = fs * 14
+base = pink(nr) * 10 ** (-26 / 20)
+bump = sosfilt(butter(4, [1900, 2100], btype="band", fs=fs, output="sos"), pink(nr))
+bump = bump / np.std(bump) * 10 ** (-26 / 20) * 1.5
+xr = np.stack([base + bump, base + bump], axis=1)
+def seg_lvl(sig, lat_, f0, f1):
+    f_, P = _welch(sig[lat_ + fs * 5: lat_ + fs * 13, 0], fs, nperseg=16384); m = (f_ >= f0) & (f_ < f1); return 10 * np.log10(P[m].sum())
+f_, Pin = _welch(xr[fs * 5: fs * 13, 0], fs, nperseg=16384)
+def din(f0, f1):
+    m = (f_ >= f0) & (f_ < f1); return 10 * np.log10(Pin[m].sum())
+rr = {}
+for res in (0.0, 0.5, 1.0):
+    y, lat, _ = run(xr, fft=4096, thr=0.0, ceil=0.0, res=res)
+    rr[res] = (seg_lvl(y, lat, 1900, 2100) - din(1900, 2100), seg_lvl(y, lat, 400, 700) - din(400, 700))
+    print(f"      resonance {res:.1f}: picco 2 kHz {rr[res][0]:+.1f} dB, 400-700 Hz {rr[res][1]:+.1f} dB")
+check("resonance 0: nessun effetto", abs(rr[0.0][0]) < 0.2)
+check("resonance 100%: il picco scende, il resto quasi no", rr[1.0][0] < -6 and abs(rr[1.0][1]) < 2.0)
+check("resonance continua e monotona", rr[1.0][0] < rr[0.5][0] < rr[0.0][0])
+
+print("6h) Learn (hold): la riduzione non viene rilasciata")
+th = np.arange(fs * 8) / fs
+amp = np.where(th < 1.0, 0.5, 0.03) * np.sin(2 * np.pi * 1000 * th)
+xh = np.stack([amp, amp], axis=1)
+hl = {}
+for h in (0, 1):
+    y, lat, _ = run(xh, fft=2048, thr=-20.0, ceil=0.0, hold=h)
+    seg = y[lat + int(5 * fs): lat + int(7 * fs), 0]
+    hl[h] = 20 * np.log10(np.sqrt(2) * np.sqrt(np.mean(seg ** 2)))
+    print(f"      hold={h}: 1 kHz a regime {hl[h]:.1f} dBFS (ingresso {20*np.log10(0.03):.1f})")
+check("hold spento: la banda torna libera", abs(hl[0] - 20 * np.log10(0.03)) < 1.0)
+check("hold acceso: la riduzione imparata resta", hl[1] < hl[0] - 8)
+
+print("6i) Release Tilt: bassi lenti / alti veloci")
+tt = np.arange(fs * 8) / fs
+amp = np.where(tt < 3.0, 0.5, 0.02)
+sg = amp * (np.sin(2 * np.pi * 100 * tt) + np.sin(2 * np.pi * 5000 * tt)) * 0.5
+xt = np.stack([sg, sg], axis=1)
+def tone_lvl(y_, lat_, f0, a, b):
+    sg_ = y_[lat_ + int(a * fs): lat_ + int(b * fs), 0]
+    c = np.exp(-2j * np.pi * f0 * np.arange(len(sg_)) / fs); w = np.hanning(len(sg_))
+    return 20 * np.log10(2 * abs(np.sum(sg_ * w * c)) / np.sum(w) + 1e-12)
+tl = {}
+for rt in (0.0, 1.0, -1.0):
+    y, lat, _ = run(xt, fft=2048, thr=-20.0, ceil=0.0, rel=300.0, rtilt=rt)
+    tl[rt] = (tone_lvl(y, lat, 100, 3.2, 3.7), tone_lvl(y, lat, 5000, 3.2, 3.7))
+    print(f"      tilt {rt:+.0f}: 100 Hz {tl[rt][0]:.1f} dB, 5 kHz {tl[rt][1]:.1f} dB (ingresso {20*np.log10(0.5*0.02):.1f})")
+check("tilt 0: bassi e alti recuperano uguale", abs(tl[0.0][0] - tl[0.0][1]) < 1.0)
+check("tilt +1: i bassi restano ridotti, gli alti sono gia' tornati", tl[1.0][0] < tl[1.0][1] - 3)
+check("tilt -1: il contrario", tl[-1.0][1] < tl[-1.0][0] - 3)
 
 print("6b) Ratio: seno -6 dBFS, soglia -20 dB (14 dB sopra)")
 x = np.stack([0.5 * np.sin(2 * np.pi * 1000 * t)] * 2, axis=1)

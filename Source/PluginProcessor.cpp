@@ -9,7 +9,7 @@ APVTS::ParameterLayout SpectralLimiterProcessor::createLayout()
     APVTS::ParameterLayout l;
     auto dbText = [] (float v, int) { return String (v, 1) + " dB"; };
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "threshold", 1 }, "Threshold",
-                                                   NormalisableRange<float> (-48.0f, 0.0f, 0.1f), -18.0f,
+                                                   NormalisableRange<float> (-60.0f, 0.0f, 0.1f), -18.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (dbText)));
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "gain", 1 }, "Gain",
                                                    NormalisableRange<float> (-12.0f, 24.0f, 0.1f), 0.0f,
@@ -26,13 +26,31 @@ APVTS::ParameterLayout SpectralLimiterProcessor::createLayout()
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (
                                                        [] (float v, int) { return String ((int) v) + " ms"; })));
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "ratio", 1 }, "Ratio",
-                                                   NormalisableRange<float> (1.0f, 100.0f, 0.1f, 0.35f), 100.0f,
+                                                   NormalisableRange<float> (1.0f, 100.0f, 0.1f, 0.35f), 1.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (
                                                        [] (float v, int) { return v >= 99.9f ? String ("inf:1") : String (v, 1) + ":1"; })));
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "attack", 1 }, "Attack",
                                                    NormalisableRange<float> (0.0f, 500.0f, 1.0f, 0.4f), 0.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (
                                                        [] (float v, int) { return v < 1.0f ? String ("istantaneo") : String ((int) v) + " ms"; })));
+    l.add (std::make_unique<AudioParameterFloat> (ParameterID { "comp", 1 }, "Compensation",
+                                                   NormalisableRange<float> (0.0f, 100.0f, 1.0f), 0.0f,
+                                                   AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                       [] (float v, int) { return String ((int) v) + "%"; })));
+    l.add (std::make_unique<AudioParameterBool> (ParameterID { "dynamic", 1 }, "Dynamic", false));
+    l.add (std::make_unique<AudioParameterFloat> (ParameterID { "range", 1 }, "Range",
+                                                   NormalisableRange<float> (0.0f, 60.0f, 0.5f), 60.0f,
+                                                   AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                       [] (float v, int) { return String (v, 1) + " dB"; })));
+    l.add (std::make_unique<AudioParameterFloat> (ParameterID { "res", 1 }, "Resonance",
+                                                   NormalisableRange<float> (0.0f, 100.0f, 1.0f), 0.0f,
+                                                   AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                       [] (float v, int) { return String ((int) v) + "%"; })));
+    l.add (std::make_unique<AudioParameterFloat> (ParameterID { "reltilt", 1 }, "Release Tilt",
+                                                   NormalisableRange<float> (-100.0f, 100.0f, 1.0f), 0.0f,
+                                                   AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                       [] (float v, int) { return v == 0.0f ? String ("neutro") : (v > 0 ? String ("bassi lenti ") : String ("alti lenti ")) + String ((int) std::abs (v)) + "%"; })));
+    l.add (std::make_unique<AudioParameterBool> (ParameterID { "learn", 1 }, "Learn", false));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "oversampling", 1 }, "Oversampling",
                                                     StringArray { "Off", "2x", "4x" }, 0));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "bands", 1 }, "Bands",
@@ -66,6 +84,12 @@ SpectralLimiterProcessor::SpectralLimiterProcessor()
     pAtk = apvts.getRawParameterValue ("attack");
     pRatio = apvts.getRawParameterValue ("ratio");
     pOs = apvts.getRawParameterValue ("oversampling");
+    pComp = apvts.getRawParameterValue ("comp");
+    pDyn = apvts.getRawParameterValue ("dynamic");
+    pRange = apvts.getRawParameterValue ("range");
+    pRes = apvts.getRawParameterValue ("res");
+    pLearn = apvts.getRawParameterValue ("learn");
+    pRelTilt = apvts.getRawParameterValue ("reltilt");
     for (int i = 0; i < sl::kMaxCurvePoints; ++i)
     {
         cType[i] = apvts.getRawParameterValue (curveId ("type", i));
@@ -163,6 +187,12 @@ void SpectralLimiterProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     p.ceilingDb = pCeil->load();
     p.releaseMs = pRel->load();
     p.attackMs = pAtk->load();
+    p.compensation = pComp->load() / 100.0;
+    p.dynamicComp = pDyn->load() > 0.5f;
+    p.maxReductionDb = pRange->load();
+    p.resonance = pRes->load() / 100.0;
+    p.hold = pLearn->load() > 0.5f;
+    p.releaseTilt = pRelTilt->load() / 100.0;
     p.ratio = pRatio->load();
     e->setParams (p);
     e->process (buffer.getWritePointer (0), buffer.getWritePointer (1), n);

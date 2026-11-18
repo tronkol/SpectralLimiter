@@ -19,8 +19,8 @@ juce_add_plugin(SpectralLimiter
     PLUGIN_MANUFACTURER_CODE Stdo
     PLUGIN_CODE Slim
     FORMATS AU VST3 Standalone
-    PRODUCT_NAME "Limiter Spettrale"
-    PLUGIN_NAME "Limiter Spettrale"
+    PRODUCT_NAME "CONTROLUNA SAUCE"
+    PLUGIN_NAME "CONTROLUNA SAUCE"
     AU_MAIN_TYPE kAudioUnitType_Effect
     VST3_CATEGORIES Fx Dynamics
     IS_SYNTH FALSE

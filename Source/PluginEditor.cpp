@@ -10,6 +10,7 @@ LimiterLookAndFeel::LimiterLookAndFeel()
     setColour (juce::PopupMenu::backgroundColourId, ui::panel);
     setColour (juce::PopupMenu::textColourId, ui::text);
     setColour (juce::PopupMenu::highlightedBackgroundColourId, ui::grid);
+    setColour (juce::PopupMenu::highlightedTextColourId, ui::text);
     setColour (juce::Label::textColourId, ui::text);
 }
 
@@ -36,14 +37,14 @@ void LimiterLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int 
     g.strokePath (val, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
     const float br = arcR - 8.0f;
-    g.setColour (ui::panel);
+    g.setColour (ui::dark);
     g.fillEllipse (c.x - br, c.y - br, br * 2.0f, br * 2.0f);
-    g.setColour (ui::grid);
+    g.setColour (ui::mid);
     g.drawEllipse (c.x - br, c.y - br, br * 2.0f, br * 2.0f, 1.0f);
 
     juce::Path ptr;
     ptr.addRoundedRectangle (-1.5f, -br + 3.0f, 3.0f, br * 0.45f, 1.5f);
-    g.setColour (ui::text);
+    g.setColour (juce::Colours::white);
     g.fillPath (ptr, juce::AffineTransform::rotation (ang).translated (c.x, c.y));
 }
 
@@ -63,6 +64,42 @@ void LimiterLookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool, in
     g.strokePath (p, juce::PathStrokeType (1.5f));
 }
 
+void LimiterLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float sliderPos,
+                                           float minPos, float maxPos, juce::Slider::SliderStyle, juce::Slider& s)
+{
+    const float cy = (float) y + (float) h * 0.5f;
+    const float x0 = std::max (minPos, (float) x), x1 = std::min (maxPos, (float) (x + w));
+    g.setColour (ui::grid);
+    g.fillRoundedRectangle (x0, cy - 2.0f, x1 - x0, 4.0f, 2.0f);
+
+    const bool bipolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0 && s.getMinimum() == -s.getMaximum();
+    const float from = bipolar ? 0.5f * (x0 + x1) : x0;
+    g.setColour (s.isEnabled() ? ui::accent : ui::dim);
+    g.fillRoundedRectangle (std::min (from, sliderPos), cy - 2.0f, std::abs (sliderPos - from), 4.0f, 2.0f);
+    if (bipolar)
+    {
+        g.setColour (ui::dim);
+        g.fillRect (0.5f * (x0 + x1) - 0.5f, cy - 5.0f, 1.0f, 10.0f);
+    }
+    g.setColour (ui::text);
+    g.fillEllipse (sliderPos - 6.0f, cy - 6.0f, 12.0f, 12.0f);
+    g.setColour (ui::bg);
+    g.fillEllipse (sliderPos - 2.5f, cy - 2.5f, 5.0f, 5.0f);
+}
+
+void LimiterLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool highlighted, bool down)
+{
+    const auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+    const bool on = b.getToggleState();
+    juce::Colour fill = on ? ui::accent : ui::panel;
+    if (highlighted) fill = fill.brighter (0.15f);
+    if (down) fill = fill.darker (0.1f);
+    g.setColour (fill);
+    g.fillRoundedRectangle (r, 5.0f);
+    g.setColour (on ? ui::accent : ui::grid);
+    g.drawRoundedRectangle (r, 5.0f, 1.0f);
+}
+
 //==============================================================================
 static float freqToX (float f, float fMin, float fMax, float w)
 {
@@ -79,6 +116,7 @@ void SpectrumDisplay::update()
         in[(size_t) i]  = a > in[(size_t) i]  ? a : in[(size_t) i]  + (a - in[(size_t) i])  * 0.25f;
         out[(size_t) i] = b > out[(size_t) i] ? b : out[(size_t) i] + (b - out[(size_t) i]) * 0.25f;
         gr[(size_t) i]  = c < gr[(size_t) i]  ? c : gr[(size_t) i]  + (c - gr[(size_t) i])  * 0.25f;
+        thrv[(size_t) i] = eng->dispThr[i].load();
     }
     repaint();
 }
@@ -121,12 +159,12 @@ void SpectrumDisplay::paint (juce::Graphics& g)
         juce::Path p;
         p.startNewSubPath (area.getX(), area.getY());
         for (int i = 0; i < np; ++i)
-            p.lineTo (xOf (i), area.getY() + area.getHeight() * juce::jlimit (0.0f, 1.0f, -gr[(size_t) i] / 36.0f) * 0.45f);
+            p.lineTo (xOf (i), area.getY() + area.getHeight() * juce::jlimit (0.0f, 1.0f, -gr[(size_t) i] / 60.0f) * 0.45f);
         p.lineTo (area.getRight(), area.getY());
         p.closeSubPath();
-        g.setColour (ui::accent.withAlpha (0.35f));
+        g.setColour (ui::text.withAlpha (0.10f));
         g.fillPath (p);
-        g.setColour (ui::accent.withAlpha (0.9f));
+        g.setColour (ui::text.withAlpha (0.55f));
         g.strokePath (p, juce::PathStrokeType (1.2f));
     }
 
@@ -148,13 +186,22 @@ void SpectrumDisplay::paint (juce::Graphics& g)
         g.strokePath (p, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved));
     };
     curve (in, ui::dim, 0.0f);
-    curve (out, ui::blue, 0.18f);
+    curve (out, ui::green, 0.22f);
 
-    // soglia
-    g.setColour (ui::text.withAlpha (0.8f));
-    const float ty = yOf (thr);
-    const float dash[] = { 5.0f, 4.0f };
-    g.drawDashedLine (juce::Line<float> (area.getX(), ty, area.getRight(), ty), dash, 2, 1.0f);
+    // soglia effettiva per banda (con la compensazione non e' piu' una retta)
+    {
+        juce::Path tp;
+        for (int i = 0; i < np; ++i)
+        {
+            const float y = yOf (thrv[(size_t) i]);
+            if (i == 0) tp.startNewSubPath (xOf (i), y); else tp.lineTo (xOf (i), y);
+        }
+        const float dash[] = { 5.0f, 4.0f };
+        juce::Path dashed;
+        juce::PathStrokeType (1.1f).createDashedStroke (dashed, tp, dash, 2);
+        g.setColour (ui::text.withAlpha (0.8f));
+        g.fillPath (dashed);
+    }
 
     drawCurve (g);
 }
@@ -327,7 +374,7 @@ void SpectrumDisplay::drawCurve (juce::Graphics& g)
         pts[i] = readPoint (i);
         if (pts[i].type != sl::kOff) ++active;
     }
-    const juce::Colour curveCol (0xff62e0a8);
+    const juce::Colour curveCol (0xff141414);
 
     // riga dello 0 dB (intervento pieno)
     g.setColour (curveCol.withAlpha (0.25f));
@@ -350,7 +397,7 @@ void SpectrumDisplay::drawCurve (juce::Graphics& g)
         if (pts[i].type == sl::kOff) continue;
         const auto pos = pointPos (i);
         const float r = (i == hoverIdx || i == dragIdx) ? 6.5f : 5.0f;
-        g.setColour (ui::bg);
+        g.setColour (ui::panel);
         g.fillEllipse (pos.x - r, pos.y - r, r * 2.0f, r * 2.0f);
         g.setColour (curveCol);
         g.drawEllipse (pos.x - r, pos.y - r, r * 2.0f, r * 2.0f, 1.8f);
@@ -394,7 +441,7 @@ void MeterBar::paint (juce::Graphics& g)
         g.setColour (ui::grid);
         g.fillRoundedRectangle (r, 3.0f);
         const float y = yOf (out, -48.0f, 0.0f);
-        g.setColour (out > -0.5f ? ui::accent : ui::blue);
+        g.setColour (out > -0.5f ? ui::text : ui::green);
         g.fillRoundedRectangle (r.withTop (y), 3.0f);
     }
     // riduzione brickwall (arancione), 0..-12 dall'alto
@@ -403,7 +450,7 @@ void MeterBar::paint (juce::Graphics& g)
         g.setColour (ui::grid);
         g.fillRoundedRectangle (r, 3.0f);
         const float h = inner.getHeight() * juce::jlimit (0.0f, 1.0f, -gr / 12.0f);
-        g.setColour (ui::accent);
+        g.setColour (ui::dark);
         g.fillRoundedRectangle (r.withHeight (h), 3.0f);
     }
 }
@@ -411,7 +458,7 @@ void MeterBar::paint (juce::Graphics& g)
 //==============================================================================
 void SpectralLimiterEditor::setupKnob (Knob& k, const juce::String& id, const juce::String& label)
 {
-    addAndMakeVisible (k.slider);
+    content.addAndMakeVisible (k.slider);
     k.slider.setLookAndFeel (&laf);
     k.slider.setRotaryParameters (juce::degreesToRadians (225.0f), juce::degreesToRadians (495.0f), true);
     k.slider.setDoubleClickReturnValue (true, proc.apvts.getParameter (id)->convertFrom0to1 (proc.apvts.getParameter (id)->getDefaultValue()));
@@ -419,11 +466,11 @@ void SpectralLimiterEditor::setupKnob (Knob& k, const juce::String& id, const ju
     k.name.setJustificationType (juce::Justification::centred);
     k.name.setColour (juce::Label::textColourId, ui::dim);
     k.name.setFont (juce::Font (juce::FontOptions (12.0f)));
-    addAndMakeVisible (k.name);
+    content.addAndMakeVisible (k.name);
     k.value.setJustificationType (juce::Justification::centred);
     k.value.setColour (juce::Label::textColourId, ui::text);
     k.value.setFont (juce::Font (juce::FontOptions (13.0f)));
-    addAndMakeVisible (k.value);
+    content.addAndMakeVisible (k.value);
     k.att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, id, k.slider);
 
     auto* param = proc.apvts.getParameter (id);
@@ -435,34 +482,83 @@ void SpectralLimiterEditor::setupKnob (Knob& k, const juce::String& id, const ju
     refresh();
 }
 
+void SpectralLimiterEditor::setupSlider (HSlider& k, const juce::String& id, const juce::String& label)
+{
+    content.addAndMakeVisible (k.slider);
+    k.slider.setLookAndFeel (&laf);
+    k.slider.setDoubleClickReturnValue (true, proc.apvts.getParameter (id)->convertFrom0to1 (proc.apvts.getParameter (id)->getDefaultValue()));
+    k.name.setText (label, juce::dontSendNotification);
+    k.name.setJustificationType (juce::Justification::centredLeft);
+    k.name.setColour (juce::Label::textColourId, ui::dim);
+    k.name.setFont (juce::Font (juce::FontOptions (12.0f)));
+    content.addAndMakeVisible (k.name);
+    k.value.setJustificationType (juce::Justification::centredRight);
+    k.value.setColour (juce::Label::textColourId, ui::text);
+    k.value.setFont (juce::Font (juce::FontOptions (13.0f)));
+    content.addAndMakeVisible (k.value);
+    k.att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, id, k.slider);
+
+    auto* param = proc.apvts.getParameter (id);
+    auto refresh = [&k, param]
+    {
+        k.value.setText (param->getText (param->getValue(), 24), juce::dontSendNotification);
+    };
+    k.slider.onValueChange = refresh;
+    refresh();
+}
+
 SpectralLimiterEditor::SpectralLimiterEditor (SpectralLimiterProcessor& p)
     : AudioProcessorEditor (&p), proc (p), display (engPtr, p.apvts)
 {
     setLookAndFeel (&laf);
-    setSize (780, 460);
+    addAndMakeVisible (content);
+    setResizable (true, true);
+    setResizeLimits (468, 390, 1560, 1300);
+    getConstrainer()->setFixedAspectRatio ((double) ui::kDesignW / (double) ui::kDesignH);
+    setSize (ui::kDesignW, ui::kDesignH);
 
-    addAndMakeVisible (display);
-    addAndMakeVisible (meter);
+    content.addAndMakeVisible (display);
+    content.addAndMakeVisible (meter);
     setupKnob (kThr, "threshold", "THRESHOLD");
     setupKnob (kRatio, "ratio", "RATIO");
-    setupKnob (kGain, "gain", "GAIN");
-    setupKnob (kBal, "balance", "BALANCE");
     setupKnob (kAtk, "attack", "ATTACK");
     setupKnob (kRel, "release", "RELEASE");
+    setupKnob (kGain, "gain", "GAIN");
     setupKnob (kCeil, "ceiling", "CEILING");
+    setupSlider (sBal, "balance", "BALANCE bassi-alti");
+    setupSlider (sComp, "comp", "COMPENSATION");
+    setupSlider (sRange, "range", "RANGE");
+    setupSlider (sRes, "res", "RESONANCE");
+    setupSlider (sRelTilt, "reltilt", "RELEASE TILT");
+
+    learnButton.setClickingTogglesState (true);
+    learnButton.setColour (juce::TextButton::textColourOffId, ui::dim);
+    learnButton.setColour (juce::TextButton::textColourOnId, ui::text);
+    content.addAndMakeVisible (learnButton);
+    learnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "learn", learnButton);
+    learnHint.setText ("LEARN  accumula la riduzione, non la rilascia mai", juce::dontSendNotification);
+    learnHint.setColour (juce::Label::textColourId, ui::dim);
+    learnHint.setFont (juce::Font (juce::FontOptions (12.0f)));
+    content.addAndMakeVisible (learnHint);
+
+    dynButton.setClickingTogglesState (true);
+    dynButton.setColour (juce::TextButton::textColourOffId, ui::dim);
+    dynButton.setColour (juce::TextButton::textColourOnId, ui::text);
+    content.addAndMakeVisible (dynButton);
+    dynAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "dynamic", dynButton);
 
     bands.addItemList (juce::StringArray { "513 bande", "1025 bande", "2049 bande", "4097 bande", "8193 bande", "16385 bande", "32769 bande" }, 1);
-    addAndMakeVisible (bands);
+    content.addAndMakeVisible (bands);
     bandsAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "bands", bands);
 
     oversampling.addItemList (juce::StringArray { "OS off", "OS 2x", "OS 4x" }, 1);
-    addAndMakeVisible (oversampling);
+    content.addAndMakeVisible (oversampling);
     osAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "oversampling", oversampling);
 
     latencyLabel.setJustificationType (juce::Justification::centredRight);
     latencyLabel.setColour (juce::Label::textColourId, ui::dim);
     latencyLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
-    addAndMakeVisible (latencyLabel);
+    content.addAndMakeVisible (latencyLabel);
 
     if (auto* o = proc.currentEngine()) engPtr = &o->core();
     startTimerHz (30);
@@ -472,7 +568,8 @@ SpectralLimiterEditor::SpectralLimiterEditor (SpectralLimiterProcessor& p)
 SpectralLimiterEditor::~SpectralLimiterEditor()
 {
     stopTimer();
-    for (auto* k : { &kThr, &kRatio, &kGain, &kBal, &kAtk, &kRel, &kCeil }) k->slider.setLookAndFeel (nullptr);
+    for (auto* k : { &kThr, &kRatio, &kAtk, &kRel, &kGain, &kCeil }) k->slider.setLookAndFeel (nullptr);
+    for (auto* k : { &sBal, &sComp, &sRange, &sRes, &sRelTilt }) k->slider.setLookAndFeel (nullptr);
     setLookAndFeel (nullptr);
 }
 
@@ -492,17 +589,21 @@ void SpectralLimiterEditor::timerCallback()
     latencyLabel.setText ("latenza " + juce::String (fs > 0 ? 1000.0 * lat / fs : 0.0, 1) + " ms", juce::dontSendNotification);
 }
 
-void SpectralLimiterEditor::paint (juce::Graphics& g)
+void Canvas::paint (juce::Graphics& g)
 {
     g.fillAll (ui::bg);
     g.setColour (ui::text);
-    g.setFont (juce::Font (juce::FontOptions (17.0f)));
-    g.drawText ("LIMITER SPETTRALE", 20, 12, 300, 24, juce::Justification::centredLeft);
+    g.setFont (juce::Font (juce::FontOptions ("Helvetica", 21.0f, juce::Font::bold))); // solo il titolo
+    g.drawText ("CONTROLUNA SAUCE", 18, 10, 380, 30, juce::Justification::centredLeft);
 }
 
 void SpectralLimiterEditor::resized()
 {
-    auto r = getLocalBounds().reduced (16);
+    const float sc = (float) getWidth() / (float) ui::kDesignW;
+    content.setTransform (juce::AffineTransform::scale (sc));
+    content.setBounds (0, 0, ui::kDesignW, ui::kDesignH);
+
+    auto r = juce::Rectangle<int> (0, 0, ui::kDesignW, ui::kDesignH).reduced (16);
     auto head = r.removeFromTop (30);
     bands.setBounds (head.removeFromRight (130).reduced (0, 2));
     head.removeFromRight (8);
@@ -511,19 +612,49 @@ void SpectralLimiterEditor::resized()
     latencyLabel.setBounds (head.removeFromRight (160));
     r.removeFromTop (8);
 
-    auto knobs = r.removeFromBottom (130);
+    auto sliders2 = r.removeFromBottom (62);
+    auto sliders1 = r.removeFromBottom (62);
+    r.removeFromBottom (8);
+    auto knobs = r.removeFromBottom (124);
     r.removeFromBottom (10);
     meter.setBounds (r.removeFromRight (64));
     r.removeFromRight (10);
     display.setBounds (r);
 
-    const int w = knobs.getWidth() / 7;
+    const int w = knobs.getWidth() / 6;
     int i = 0;
-    for (auto* k : { &kThr, &kRatio, &kGain, &kBal, &kAtk, &kRel, &kCeil })
+    for (auto* k : { &kThr, &kRatio, &kAtk, &kRel, &kGain, &kCeil })
     {
         auto c = knobs.withX (knobs.getX() + w * i++).withWidth (w).reduced (6, 0);
         k->name.setBounds (c.removeFromTop (16));
         k->value.setBounds (c.removeFromBottom (18));
         k->slider.setBounds (c);
     }
+
+    auto layoutRow = [&] (juce::Rectangle<int> row, HSlider* a, HSlider* b, HSlider* c3)
+    {
+        const int sw = row.getWidth() / 3;
+        int j = 0;
+        for (auto* k : { a, b, c3 })
+        {
+            if (k == nullptr) { ++j; continue; }
+            auto c = row.withX (row.getX() + sw * j).withWidth (sw).reduced (8, 0);
+            ++j;
+            auto top = c.removeFromTop (20);
+            k->value.setBounds (top.removeFromRight (84));
+            k->name.setBounds (top);
+            if (k == &sComp)
+            {
+                dynButton.setBounds (c.removeFromRight (74).reduced (0, 6));
+                c.removeFromRight (8);
+            }
+            k->slider.setBounds (c);
+        }
+    };
+    layoutRow (sliders1, &sBal, &sComp, &sRange);
+    layoutRow (sliders2, &sRes, &sRelTilt, nullptr);
+
+    auto third = sliders2.withX (sliders2.getX() + (sliders2.getWidth() / 3) * 2).withWidth (sliders2.getWidth() / 3).reduced (8, 0);
+    learnHint.setBounds (third.removeFromTop (20));
+    learnButton.setBounds (third.removeFromLeft (110).reduced (0, 6));
 }
