@@ -17,7 +17,7 @@ APVTS::ParameterLayout SpectralLimiterProcessor::createLayout()
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "balance", 1 }, "Balance",
                                                    NormalisableRange<float> (-100.0f, 100.0f, 1.0f), 0.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (
-                                                       [] (float v, int) { return v == 0.0f ? String ("uniforme") : (v < 0 ? String ("bassi ") : String ("alti ")) + String ((int) std::abs (v)) + "%"; })));
+                                                       [] (float v, int) { return v == 0.0f ? String ("even") : (v < 0 ? String ("low ") : String ("high ")) + String ((int) std::abs (v)) + "%"; })));
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "ceiling", 1 }, "Ceiling",
                                                    NormalisableRange<float> (-12.0f, 0.0f, 0.1f), -1.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (dbText)));
@@ -32,7 +32,7 @@ APVTS::ParameterLayout SpectralLimiterProcessor::createLayout()
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "attack", 1 }, "Attack",
                                                    NormalisableRange<float> (0.0f, 500.0f, 1.0f, 0.4f), 0.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (
-                                                       [] (float v, int) { return v < 1.0f ? String ("istantaneo") : String ((int) v) + " ms"; })));
+                                                       [] (float v, int) { return v < 1.0f ? String ("instant") : String ((int) v) + " ms"; })));
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "comp", 1 }, "Compensation",
                                                    NormalisableRange<float> (0.0f, 100.0f, 1.0f), 0.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (
@@ -49,7 +49,7 @@ APVTS::ParameterLayout SpectralLimiterProcessor::createLayout()
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { "reltilt", 1 }, "Release Tilt",
                                                    NormalisableRange<float> (-100.0f, 100.0f, 1.0f), 0.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (
-                                                       [] (float v, int) { return v == 0.0f ? String ("neutro") : (v > 0 ? String ("bassi lenti ") : String ("alti lenti ")) + String ((int) std::abs (v)) + "%"; })));
+                                                       [] (float v, int) { return v == 0.0f ? String ("neutral") : (v > 0 ? String ("slow lows ") : String ("slow highs ")) + String ((int) std::abs (v)) + "%"; })));
     l.add (std::make_unique<AudioParameterBool> (ParameterID { "learn", 1 }, "Learn", false));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "oversampling", 1 }, "Oversampling",
                                                     StringArray { "Off", "2x", "4x" }, 0));
@@ -58,7 +58,7 @@ APVTS::ParameterLayout SpectralLimiterProcessor::createLayout()
     const float defFreq[sl::kMaxCurvePoints] = { 100.0f, 250.0f, 700.0f, 2000.0f, 5000.0f, 10000.0f };
     for (int i = 0; i < sl::kMaxCurvePoints; ++i)
     {
-        l.add (std::make_unique<AudioParameterChoice> (ParameterID { curveId ("type", i), 1 }, "Focus " + String (i + 1) + " tipo",
+        l.add (std::make_unique<AudioParameterChoice> (ParameterID { curveId ("type", i), 1 }, "Focus " + String (i + 1) + " type",
                                                         StringArray { "Off", "Low cut", "Low shelf", "Peak", "High shelf", "High cut" }, 0));
         l.add (std::make_unique<AudioParameterFloat> (ParameterID { curveId ("freq", i), 1 }, "Focus " + String (i + 1) + " freq",
                                                        NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.23f), defFreq[i]));

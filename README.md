@@ -29,7 +29,7 @@ Latenza (48 kHz): 513 bande ≈ 24 ms, 2049 ≈ 88 ms (default), 8193 ≈ 344 ms
 3. A fine build scarica l'artifact `LimiterSpettrale-macOS` e decomprimilo.
 
 ## GUI
-La finestra si ridimensiona trascinando l'angolo in basso a destra (mantiene le proporzioni). Tema chiaro: bianco/avorio, manopole nere, accenti verdi. Il titolo è in Helvetica Bold.
+La finestra si ridimensiona trascinando l'angolo in basso a destra (mantiene le proporzioni). Interfaccia in inglese. Tema chiaro attenuato: sfondo grigio caldo, manopole nere a forma di squircle (stessa geometria di ULTRAMEGASUPERMAXICHORUS), accenti verdi. Il titolo è in Helvetica Bold.
 
 ## Installare
 Il plugin ora si chiama CONTROLUNA SAUCE: elimina il vecchio `Limiter Spettrale.component` / `.vst3` dalle cartelle dei plugin, altrimenti Logic ti mostra due versioni.

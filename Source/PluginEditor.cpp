@@ -1,6 +1,39 @@
 #include "PluginEditor.h"
 
 //==============================================================================
+// Geometria: tutto costruito sullo "squircle" (superellisse, esponente 5), come ULTRAMEGASUPERMAXICHORUS
+namespace geo
+{
+constexpr float kN = 5.0f; // 2 = cerchio, piu' alto = piu' quadrato
+
+static juce::Point<float> point (juce::Point<float> c, float r, float a)
+{
+    const float s = std::sin (a), co = std::cos (a);
+    const float k = std::pow (std::pow (std::abs (s), kN) + std::pow (std::abs (co), kN), -1.0f / kN);
+    return { c.x + r * k * s, c.y - r * k * co };
+}
+
+static juce::Path arc (juce::Point<float> c, float r, float a0, float a1)
+{
+    juce::Path p;
+    const int steps = juce::jmax (4, (int) std::ceil (std::abs (a1 - a0) / 0.025f));
+    for (int i = 0; i <= steps; ++i)
+    {
+        const auto pt = point (c, r, a0 + (a1 - a0) * (float) i / (float) steps);
+        if (i == 0) p.startNewSubPath (pt); else p.lineTo (pt);
+    }
+    return p;
+}
+
+static juce::Path body (juce::Point<float> c, float r)
+{
+    auto p = arc (c, r, 0.0f, juce::MathConstants<float>::twoPi);
+    p.closeSubPath();
+    return p;
+}
+}
+
+//==============================================================================
 LimiterLookAndFeel::LimiterLookAndFeel()
 {
     setColour (juce::ComboBox::backgroundColourId, ui::panel);
@@ -17,35 +50,38 @@ LimiterLookAndFeel::LimiterLookAndFeel()
 void LimiterLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                                            float a0, float a1, juce::Slider& s)
 {
-    const auto b = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (6.0f);
-    const float r = std::min (b.getWidth(), b.getHeight()) * 0.5f;
+    const auto b = juce::Rectangle<int> (x, y, w, h).toFloat();
     const auto c = b.getCentre();
-    const float arcR = r - 2.0f;
+    const float r = std::min (b.getWidth(), b.getHeight()) * 0.5f - 2.0f;
+    const bool big = r > 38.0f;
+    const float thick = big ? 4.0f : 2.5f;
     const float ang = a0 + pos * (a1 - a0);
+    const float ar = r - thick * 0.5f;
+    const juce::PathStrokeType stroke (thick, juce::PathStrokeType::mitered, juce::PathStrokeType::butt);
 
-    juce::Path track;
-    track.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, a0, a1, true);
-    g.setColour (ui::grid);
-    g.strokePath (track, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    // traccia
+    g.setColour (ui::text.withAlpha (0.22f));
+    g.strokePath (geo::arc (c, ar, a0, a1), stroke);
 
-    // arco valore: parte dal centro se la scala e' bipolare (balance), altrimenti dal minimo
-    const bool bipolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0 && s.getMinimum() == -s.getMaximum();
-    const float aStart = bipolar ? (a0 + 0.5f * (a1 - a0)) : a0;
-    juce::Path val;
-    val.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, std::min (aStart, ang), std::max (aStart, ang), true);
-    g.setColour (s.isEnabled() ? ui::accent : ui::dim);
-    g.strokePath (val, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    // valore (le manopole bipolari partono dal centro)
+    const bool bipolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;
+    const float from = bipolar ? a0 + 0.5f * (a1 - a0) : a0;
+    if (std::abs (ang - from) > 0.01f)
+    {
+        g.setColour (ui::accent);
+        g.strokePath (geo::arc (c, ar, std::min (from, ang), std::max (from, ang)), stroke);
+    }
 
-    const float br = arcR - 8.0f;
+    // corpo
+    const float br = r - thick - (big ? 7.0f : 4.0f);
     g.setColour (ui::dark);
-    g.fillEllipse (c.x - br, c.y - br, br * 2.0f, br * 2.0f);
-    g.setColour (ui::mid);
-    g.drawEllipse (c.x - br, c.y - br, br * 2.0f, br * 2.0f, 1.0f);
+    g.fillPath (geo::body (c, br));
 
-    juce::Path ptr;
-    ptr.addRoundedRectangle (-1.5f, -br + 3.0f, 3.0f, br * 0.45f, 1.5f);
+    // lancetta
+    const auto p0 = geo::point (c, br * (big ? 0.45f : 0.3f), ang);
+    const auto p1 = geo::point (c, br * 0.82f, ang);
     g.setColour (juce::Colours::white);
-    g.fillPath (ptr, juce::AffineTransform::rotation (ang).translated (c.x, c.y));
+    g.drawLine (juce::Line<float> (p0, p1), big ? 3.0f : 2.0f);
 }
 
 void LimiterLookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox&)
@@ -295,7 +331,7 @@ void SpectrumDisplay::mouseDown (const juce::MouseEvent& e)
         m.addItem (4, "High shelf");
         m.addItem (5, "High cut");
         m.addSeparator();
-        m.addItem (6, "Elimina punto");
+        m.addItem (6, "Delete point");
         juce::Component::SafePointer<SpectrumDisplay> safe (this);
         m.showMenuAsync (juce::PopupMenu::Options(), [safe, h] (int r)
         {
@@ -420,7 +456,7 @@ void SpectrumDisplay::drawCurve (juce::Graphics& g)
     {
         g.setFont (juce::Font (juce::FontOptions (11.0f)));
         g.setColour (ui::dim);
-        g.drawText ("Focus: doppio click per aggiungere un punto, tasto destro per il tipo, rotella per la Q",
+        g.drawText ("Focus: double-click to add a point, right-click for type, mouse wheel for Q",
                     (int) area.getX() + 6, (int) area.getY() + 2, (int) area.getWidth() - 12, 14, juce::Justification::centredLeft);
     }
 }
@@ -525,7 +561,7 @@ SpectralLimiterEditor::SpectralLimiterEditor (SpectralLimiterProcessor& p)
     setupKnob (kRel, "release", "RELEASE");
     setupKnob (kGain, "gain", "GAIN");
     setupKnob (kCeil, "ceiling", "CEILING");
-    setupSlider (sBal, "balance", "BALANCE bassi-alti");
+    setupSlider (sBal, "balance", "BALANCE low-high");
     setupSlider (sComp, "comp", "COMPENSATION");
     setupSlider (sRange, "range", "RANGE");
     setupSlider (sRes, "res", "RESONANCE");
@@ -536,7 +572,7 @@ SpectralLimiterEditor::SpectralLimiterEditor (SpectralLimiterProcessor& p)
     learnButton.setColour (juce::TextButton::textColourOnId, ui::text);
     content.addAndMakeVisible (learnButton);
     learnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "learn", learnButton);
-    learnHint.setText ("LEARN  accumula la riduzione, non la rilascia mai", juce::dontSendNotification);
+    learnHint.setText ("LEARN  reduction only accumulates", juce::dontSendNotification);
     learnHint.setColour (juce::Label::textColourId, ui::dim);
     learnHint.setFont (juce::Font (juce::FontOptions (12.0f)));
     content.addAndMakeVisible (learnHint);
@@ -547,7 +583,7 @@ SpectralLimiterEditor::SpectralLimiterEditor (SpectralLimiterProcessor& p)
     content.addAndMakeVisible (dynButton);
     dynAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "dynamic", dynButton);
 
-    bands.addItemList (juce::StringArray { "513 bande", "1025 bande", "2049 bande", "4097 bande", "8193 bande", "16385 bande", "32769 bande" }, 1);
+    bands.addItemList (juce::StringArray { "513 bands", "1025 bands", "2049 bands", "4097 bands", "8193 bands", "16385 bands", "32769 bands" }, 1);
     content.addAndMakeVisible (bands);
     bandsAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "bands", bands);
 
@@ -586,7 +622,7 @@ void SpectralLimiterEditor::timerCallback()
 
     const int lat = os.latencySamples();
     const double fs = os.baseSampleRate();
-    latencyLabel.setText ("latenza " + juce::String (fs > 0 ? 1000.0 * lat / fs : 0.0, 1) + " ms", juce::dontSendNotification);
+    latencyLabel.setText ("latency " + juce::String (fs > 0 ? 1000.0 * lat / fs : 0.0, 1) + " ms", juce::dontSendNotification);
 }
 
 void Canvas::paint (juce::Graphics& g)

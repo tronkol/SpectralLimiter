@@ -3,12 +3,12 @@
 
 namespace ui
 {
-    // tema chiaro: sfondo bianco/avorio, manopole e testi nero/grigi, accenti verdi
-    const juce::Colour bg      { 0xfff3f3f0 }; // sfondo
-    const juce::Colour panel   { 0xffffffff }; // pannelli
-    const juce::Colour grid    { 0xffdcdcd8 }; // griglie, tracce
+    // tema chiaro attenuato: sfondo grigio caldo, manopole e testi nero/grigi, accenti verdi
+    const juce::Colour bg      { 0xffd3d3ce }; // sfondo
+    const juce::Colour panel   { 0xffe6e6e1 }; // pannelli
+    const juce::Colour grid    { 0xffbdbdb7 }; // griglie, tracce
     const juce::Colour text    { 0xff141414 }; // nero
-    const juce::Colour dim     { 0xff7a7a76 }; // grigio
+    const juce::Colour dim     { 0xff5e5e5a }; // grigio
     const juce::Colour dark    { 0xff1c1c1e }; // corpo manopole
     const juce::Colour mid     { 0xff3a3a3c };
     const juce::Colour accent  { 0xff22c55e }; // verde
